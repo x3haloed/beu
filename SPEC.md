@@ -291,6 +291,94 @@ Query agent identity state.
 
 ---
 
+## Command: `index`
+
+Index content for future recall (hybrid search: FTS + vectors).
+
+### Request
+
+```json
+{
+  "version": "1.0.0",
+  "command": "index",
+  "id": "req-index-1",
+  "payload": {
+    "namespace": "default",
+    "entries": [
+      {
+        "entry_id": "turn:123:user",
+        "source_type": "ledger_entry",
+        "source_id": "turn:123",
+        "content": "Write me a detailed explanation of X",
+        "metadata": {
+          "kind": "user_turn",
+          "thread_id": "thread-1",
+          "turn_id": "turn-123"
+        }
+      }
+    ],
+    "embed": true
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "version": "1.0.0",
+  "id": "req-index-1",
+  "ok": true,
+  "data": {
+    "indexed": 1,
+    "embeddings_generated": 1
+  }
+}
+```
+
+---
+
+## Command: `status`
+
+Check the memory plugin status (embedding availability, storage health).
+
+### Request
+
+```json
+{
+  "version": "1.0.0",
+  "command": "status",
+  "id": "req-status-1",
+  "payload": {
+    "namespace": "default"
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "version": "1.0.0",
+  "id": "req-status-1",
+  "ok": true,
+  "data": {
+    "storage": "ok",
+    "embedding_available": true,
+    "vector_available": true,
+    "last_distilled": "2026-03-27T10:00:00Z",
+    "counts": {
+      "invariants": 5,
+      "facts": 23,
+      "wake_packs": 12,
+      "drift_items": 2
+    }
+  }
+}
+```
+
+---
+
 ## Error Codes
 
 | Code | Description |

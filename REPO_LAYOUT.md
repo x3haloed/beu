@@ -2,35 +2,49 @@
 
 ```
 beu/
-├── ARCHITECTURE.md          # System design document
+├── ARCHITECTURE.md          # Detailed system design (host requirements, data flows)
 ├── REPO_LAYOUT.md           # This file
 ├── README.md                # Quick start, installation
-├── SPEC.md                  # Protocol specification
+├── SPEC.md                  # STDIO protocol specification
 │
 ├── bin/                     # Built binaries (gitignored)
 │   └── beu                  # Final executable
 │
-├── src/                     # Rust source
-│   ├── main.rs              # Entry point, CLI dispatcher
+├── src/                     # Rust source (stateless binary)
+│   ├── main.rs              # Entry point, CLI dispatcher, STDIO loop
 │   ├── lib.rs               # Library root
 │   │
 │   ├── commands/            # Command implementations
 │   │   ├── mod.rs
-│   │   ├── distill.rs       # Compression/distillation
-│   │   ├── recall.rs        # Memory search
-│   │   ├── rebuild.rs       # Full rebuild
-│   │   └── identity.rs      # Identity queries
+│   │   ├── distill.rs       # Compression/distillation (LLM-driven)
+│   │   ├── recall.rs        # Memory search (hybrid: FTS + vectors)
+│   │   ├── index.rs         # Index content for recall
+│   │   ├── rebuild.rs       # Full rebuild from raw history
+│   │   ├── identity.rs      # Agent identity queries
+│   │   └── status.rs        # Plugin status check
 │   │
 │   ├── storage/             # Persistence layer
 │   │   ├── mod.rs
-│   │   ├── db.rs            # SQLite operations
-│   │   ├── memory.rs        # Memory artifact storage
-│   │   └── embeddings.rs    # Vector embedding ops
+│   │   ├── db.rs            # SQLite operations (libsql)
+│   │   ├── fact.rs          # Fact storage
+│   │   ├── invariant.rs     # Invariant storage
+│   │   ├── drift.rs         # Drift item storage
+│   │   ├── wakepack.rs      # Wake pack storage
+│   │   ├── recall.rs        # Recall chunk storage
+│   │   └── migrations/      # Schema migrations
 │   │
-│   ├── model/               # Model interactions
+│   ├── embedding/           # Embedding/vector operations
 │   │   ├── mod.rs
-│   │   ├── client.rs        # LLM client abstraction
-│   │   └── prompts.rs       # Compressor prompts
+│   │   ├── provider.rs     # Embedding provider abstraction
+│   │   ├── openai.rs       # OpenAI embeddings
+│   │   ├── ollama.rs        # Ollama embeddings
+│   │   └── local.rs        # Local/sentence-transformers
+│   │
+│   ├── compress/            # LLM-driven compression
+│   │   ├── mod.rs
+│   │   ├── client.rs       # LLM client abstraction
+│   │   ├── prompts.rs      # Compressor system prompts
+│   │   └── output.rs       # Compressor output parsing
 │   │
 │   ├── protocol/            # STDIO protocol
 │   │   ├── mod.rs
@@ -43,45 +57,28 @@ beu/
 │       ├── fact.rs
 │       ├── invariant.rs
 │       ├── drift.rs
-│       └── wake_pack.rs
-│
-├── adapters/                # Host adapters (separate repos)
-│   ├── beu-hermes/          # hermes-agent adapter (Python)
-│   │   ├── README.md
-│   │   ├── beu_hermes/
-│   │   │   ├── __init__.py
-│   │   │   ├── plugin.py    # Hermes plugin interface
-│   │   │   ├── client.py    # STDIO client
-│   │   │   └── hooks.py     # Lifecycle hooks
-│   │   └── pyproject.toml
-│   │
-│   └── beu-openclaw/        # OpenClaw adapter (TypeScript)
-│       ├── README.md
-│       ├── src/
-│       │   ├── index.ts     # OpenClaw plugin entry
-│       │   ├── client.ts    # STDIO client
-│       │   └── runtime.ts   # Memory runtime adapter
-│       └── package.json
-│
-├── scripts/                 # Dev scripts
-│   ├── build.rs             # Build script
-│   ├── test.sh              # Test runner
-│   └── bench.sh             # Benchmark runner
+│       ├── wakepack.rs
+│       └── ledger.rs
 │
 ├── tests/                   # Integration tests
-│   ├── commands.rs          # Command tests
-│   ├── protocol.rs          # Protocol tests
-│   └── storage.rs           # Storage tests
+│   ├── commands.rs
+│   ├── protocol.rs
+│   └── storage.rs
 │
-└── Cargo.toml               # Rust manifest
+├── Cargo.toml              # Rust manifest
+├── rustfmt.toml            # Formatting config
+└── .cargo/                 # Build config
+    └── config.toml
 ```
 
 ## Notes
 
-- **Adapters are separate** - They live in their own repos or directories, not in the core binary. This keeps the binary focused and lets each host have its own adapter with host-specific code.
+- **Adapters are separate repos** - `beu-hermes` (Python) and `beu-openclaw` (TypeScript) are their own repos. They wrap this binary and implement the host plugin API.
 
-- **Core is pure** - `src/` contains no host-specific code. It's pure Rust with no Python/TypeScript dependencies.
+- **Core is stateless** - The binary has no memory between calls. All state lives in `storage/`.
 
-- **Protocol first** - The `SPEC.md` defines the exact JSON format. Adapters implement this, not the binary.
+- **Storage is pluggable** - Default is SQLite (libsql), but the `storage/` abstraction allows swapping backends.
 
-- **Storage is pluggable** - `storage/` is an abstraction. Default is SQLite, but could swap to different backends.
+- **Embedding providers** - The `embedding/` module supports multiple providers (OpenAI, Ollama, local). Configured at runtime.
+
+- **Compressor** - The `compress/` module handles LLM-driven distillation. Currently uses OpenAI-compatible API, extensible to others.

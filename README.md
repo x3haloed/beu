@@ -1,6 +1,6 @@
 # BeU
 
-> Be You. Becoming; Unfurling.
+> Becoming; Unfurling. Be You.
 
 A stateless identity plugin for agent frameworks. Enables continuous learning, identity persistence, and long-term memory without requiring the host to manage lifecycle.
 

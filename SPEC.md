@@ -1,0 +1,310 @@
+# BeU Protocol Specification
+
+Version: 1.0.0
+
+All communication is JSON over STDIO. The host sends a request, BeU responds, process exits.
+
+## Transport
+
+- **Input**: Read JSON from stdin until EOF
+- **Output**: Write JSON to stdout
+- **Errors**: Write to stderr, non-zero exit code
+
+## Request Format
+
+```json
+{
+  "version": "1.0.0",
+  "command": "distill|recall|rebuild|identity",
+  "id": "uuid",
+  "payload": { ... }
+}
+```
+
+## Response Format
+
+```json
+{
+  "version": "1.0.0",
+  "id": "uuid",
+  "ok": true,
+  "data": { ... }
+}
+```
+
+```json
+{
+  "version": "1.0.0",
+  "id": "uuid",
+  "ok": false,
+  "error": "error message",
+  "code": "ERROR_CODE"
+}
+```
+
+---
+
+## Command: `distill`
+
+Compress thread history into memory artifacts.
+
+### Request
+
+```json
+{
+  "version": "1.0.0",
+  "command": "distill",
+  "id": "req-123",
+  "payload": {
+    "namespace": "default",
+    "thread_id": "thread-abc",
+    "turn_id": "turn-xyz",
+    "prior_wake_pack": {
+      "content": "...",
+      "summary": "..."
+    },
+    "active_invariants": [
+      {
+        "id": "inv-1",
+        "claim": "User prefers verbose responses",
+        "support_excerpt": "Multiple instances of user asking for detail",
+        "falsifier": "Future turns show preference for brevity"
+      }
+    ],
+    "thread_history": [
+      {
+        "entry_id": "turn:123:user",
+        "kind": "user_turn",
+        "content": "Write me a detailed explanation of X",
+        "citation": "turn:123",
+        "created_at": "2026-03-27T10:00:00Z"
+      },
+      {
+        "entry_id": "turn:123:assistant",
+        "kind": "agent_turn",
+        "content": "Here is a detailed explanation...",
+        "citation": "turn:123",
+        "created_at": "2026-03-27T10:00:01Z"
+      },
+      {
+        "entry_id": "event:456:tool_result",
+        "kind": "tool_result",
+        "content": "{\"result\": \"success\"}",
+        "citation": "event:456",
+        "created_at": "2026-03-27T10:00:02Z"
+      }
+    ]
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "version": "1.0.0",
+  "id": "req-123",
+  "ok": true,
+  "data": {
+    "wake_pack": {
+      "content": "# Wake Pack\n\n- User asked: Write me a detailed explanation...",
+      "summary": "User wants detailed technical explanations"
+    },
+    "facts": [
+      {
+        "id": "fact-1",
+        "claim": "User prefers detailed technical explanations",
+        "support_excerpt": "User asked for detailed explanation of X",
+        "falsifier": "Future turns show preference for brief answers",
+        "citations": ["turn:123:user"]
+      }
+    ],
+    "invariant_adds": [
+      {
+        "id": "inv-new-1",
+        "claim": "User prefers detailed technical explanations",
+        "support_excerpt": "Multiple user requests for detailed content",
+        "falsifier": "User starts asking for brief answers",
+        "supersedes_ids": [],
+        "derived_from_fact_ids": ["fact-1"]
+      }
+    ],
+    "invariant_removes": [],
+    "drift_flags": [],
+    "drift_contradictions": [],
+    "drift_merges": []
+  }
+}
+```
+
+---
+
+## Command: `recall`
+
+Search memory for relevant information.
+
+### Request
+
+```json
+{
+  "version": "1.0.0",
+  "command": "recall",
+  "id": "req-456",
+  "payload": {
+    "namespace": "default",
+    "query": "what does user prefer",
+    "limit": 5,
+    "sources": ["invariant", "fact", "wake_pack"]
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "version": "1.0.0",
+  "id": "req-456",
+  "ok": true,
+  "data": {
+    "hits": [
+      {
+        "source_type": "invariant",
+        "source_id": "inv-1",
+        "content": "User prefers verbose responses",
+        "score": 0.92,
+        "citation": "inv-1"
+      },
+      {
+        "source_type": "fact",
+        "source_id": "fact-2",
+        "content": "User asked for detailed explanation",
+        "score": 0.78,
+        "citation": "fact-2"
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Command: `rebuild`
+
+Rebuild entire memory from raw thread history.
+
+### Request
+
+```json
+{
+  "version": "1.0.0",
+  "command": "rebuild",
+  "id": "req-789",
+  "payload": {
+    "namespace": "default",
+    "threads": [
+      {
+        "id": "thread-1",
+        "turns": [
+          {
+            "id": "turn-1",
+            "user_message": "Hello",
+            "assistant_message": "Hi there",
+            "created_at": "2026-03-27T10:00:00Z"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "version": "1.0.0",
+  "id": "req-789",
+  "ok": true,
+  "data": {
+    "processed_turns": 15,
+    "memory_snapshot": {
+      "invariants_count": 3,
+      "facts_count": 12,
+      "wake_packs_count": 5,
+      "drift_items_count": 0
+    }
+  }
+}
+```
+
+---
+
+## Command: `identity`
+
+Query agent identity state.
+
+### Request
+
+```json
+{
+  "version": "1.0.0",
+  "command": "identity",
+  "id": "req-abc",
+  "payload": {
+    "namespace": "default",
+    "query": "invariants|drift|summary|all",
+    "limit": 10
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "version": "1.0.0",
+  "id": "req-abc",
+  "ok": true,
+  "data": {
+    "invariants": [
+      {
+        "id": "inv-1",
+        "claim": "User prefers verbose responses",
+        "support_excerpt": "Multiple user requests for detail",
+        "falsifier": "User asks for brief answers",
+        "status": "active"
+      }
+    ],
+    "drift": {
+      "flags": [],
+      "contradictions": [],
+      "merges": []
+    },
+    "summary": {
+      "wake_pack": "Current: User preferences for detail...",
+      "last_distilled": "2026-03-27T09:30:00Z"
+    }
+  }
+}
+```
+
+---
+
+## Error Codes
+
+| Code | Description |
+|------|-------------|
+| `INVALID_REQUEST` | Malformed JSON or missing required fields |
+| `UNKNOWN_COMMAND` | Command not recognized |
+| `STORAGE_ERROR` | Database or filesystem error |
+| `MODEL_ERROR` | LLM call failed |
+| `NOT_FOUND` | Requested resource doesn't exist |
+| `NAMESPACE_CONFLICT` | Namespace already exists |
+
+## Versioning
+
+- `version` field is required in all requests/responses
+- Clients should specify the protocol version they expect
+- Server responds with the same version (or closest compatible)
+- Backward compatibility: newer server works with older clients

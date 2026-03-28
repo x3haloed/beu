@@ -470,3 +470,118 @@ Both adapters should implement caching:
 - Cache last identity/invariants for quick retrieval
 
 This gives "long-lived" behavior while maintaining "stateless core" principle.
+
+---
+
+## Multi-Agent Identity Isolation
+
+### OpenClaw
+
+OpenClaw supports multiple agents with separate memory stores. Each agent has its own database file:
+
+```
+~/.openclaw/memory/{agentId}.sqlite
+```
+
+The `MemoryPluginRuntime.getMemorySearchManager()` receives `agentId` in its parameters, allowing the binary to route requests to the correct database.
+
+**BeU Mapping:**
+- The binary receives `namespace` (agent ID) in every request
+- Storage path: `{beu_data}/namespaces/{agent_id}/`
+
+### Hermes
+
+Hermes has **one agent identity** per running Hermes process (or per platform per user). The identity is defined by:
+- `SOUL.md` (custom identity file)
+- `DEFAULT_AGENT_IDENTITY` (built-in)
+
+**BeU Mapping:**
+- Use a single namespace for the Hermes instance: `default`
+
+### Summary
+
+| Host | Identity Boundary | Namespace Strategy |
+|------|------------------|-------------------|
+| OpenClaw | Per agent (`agentId`) | `{agentId}` |
+| Hermes | Per Hermes instance (or per user/platform) | `default` |
+
+---
+
+## LLM Access (Compressor)
+
+The binary needs LLM responses for the `distill` command (LLM-driven compression).
+
+### How It Works
+
+The adapter runs in the same process as the host - it CAN access the host's normalized LLM client. This is the correct pattern:
+
+```
+Adapter (in host process)
+    │
+    ├── Has access to host's LLM client (normalized transport, auth, routing)
+    │
+    │  distill request
+    │  (includes prompt + context, adapter makes the LLM call)
+    ▼
+Binary (stateless)
+    │
+    │  receives LLM response
+    │  parses output → extracts facts, invariants, wake pack
+    ▼
+Adapter stores results
+```
+
+**Benefits:**
+- Reuses host's model routing, auth handling, transport normalization
+- No need to configure separate API keys for BeU
+- Adapter controls which model to use for distillation
+
+### Implementation
+
+The `distill` command payload includes:
+- `prompt` - the compressor system prompt
+- `context` - thread history, active invariants, prior wake pack
+- `model` (optional) - which model to use
+
+The adapter:
+1. Makes the LLM call using host's client
+2. Passes the raw response to the binary
+3. Binary parses structured output (facts, invariants, etc.)
+
+The binary's `compress/` module handles output parsing, not the LLM call itself.
+
+---
+
+## Embeddings
+
+### Strategy: FTS5 First
+
+Per AGENTS.md principle: "vector search is better at semantic search than FTS5, but FTS5 must be made to work as well as possible *first* before exploring vector search"
+
+**Default: FTS5 hybrid search**
+- SQLite FTS5 for full-text search (BM25 ranking)
+- Keyword extraction and matching
+- No external dependencies
+- Works offline, on-device
+
+**Where supported: Optional vector enhancement**
+- If host (OpenClaw) has embedding system, adapter can optionally use it
+- Binary can accept pre-computed embeddings from adapter
+- Keeps binary simple but allows upgrade path
+
+### OpenClaw
+
+OpenClaw has sophisticated embedding providers. The BeU adapter can:
+1. Use binary's built-in FTS5 (default)
+2. Optionally proxy to OpenClaw's embedding system for vector search
+3. Configurable via adapter config
+
+Built-in providers in OpenClaw: openai, gemini, voyage, mistral, ollama, local (sentence-transformers)
+
+### Hermes
+
+No built-in embedding system. Use binary's FTS5-only approach.
+
+### Implementation
+
+The binary's recall command will always work with FTS5. If embeddings are available (either from binary's own embedding module or passed in from adapter), vector scores are merged with BM25.

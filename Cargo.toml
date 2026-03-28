@@ -1,0 +1,25 @@
+[package]
+name = "beu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libsql = { version = "0.6", default-features = false, features = ["core"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.8", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "5.0"
+
+[lib]
+name = "beu"
+path = "src/lib.rs"
+
+[[bin]]
+name = "beu"
+path = "src/main.rs"

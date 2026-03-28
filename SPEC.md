@@ -15,11 +15,14 @@ All communication is JSON over STDIO. The host sends a request, BeU responds, pr
 ```json
 {
   "version": "1.0.0",
-  "command": "distill|recall|rebuild|identity",
+  "command": "distill|recall|rebuild|identity|index|status",
   "id": "uuid",
+  "namespace": "agent-123",       // Agent/namespace identifier
   "payload": { ... }
 }
 ```
+
+Note: `namespace` maps to the agent ID in OpenClaw or just "default" in Hermes, which has no multi-agent support. This provides multi-agent identity isolation.
 
 ## Response Format
 

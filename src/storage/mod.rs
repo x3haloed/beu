@@ -176,16 +176,20 @@ impl Db {
     ) -> anyhow::Result<Vec<MemoryRecallHit>> {
         let (_guard, conn) = self.write_connection().await?;
         let normalized_query = normalize_text(query);
+        let query_terms = tokenize_terms(&normalized_query);
+        let expanded_terms = expand_query_terms(&query_terms);
+        let fts_query = build_fts_query(&expanded_terms);
+
         let mut sql = String::from(
-            "SELECT m.id, m.item_type AS source_type, m.source_type, m.source_id, COALESCE(m.summary, t.content) AS content, m.citation, m.importance, 0.0 AS rank
+            "SELECT m.id, m.item_type AS source_type, m.source_type, m.source_id, COALESCE(m.summary, t.content) AS content, m.citation, m.importance, m.updated_at, 0.0 AS rank
              FROM memory_items m
              JOIN memory_item_text t ON t.item_id = m.id
              WHERE m.namespace_id = ? AND m.deleted_at IS NULL",
         );
-        let use_fts = !normalized_query.is_empty();
+        let use_fts = !fts_query.is_empty();
         if use_fts {
             sql = String::from(
-                "SELECT m.id, m.item_type AS source_type, m.source_type, m.source_id, COALESCE(m.summary, t.content) AS content, m.citation, m.importance, bm25(memory_item_fts) AS rank
+                "SELECT m.id, m.item_type AS source_type, m.source_type, m.source_id, COALESCE(m.summary, t.content) AS content, m.citation, m.importance, m.updated_at, bm25(memory_item_fts) AS rank
                  FROM memory_item_fts
                  JOIN memory_items m ON m.id = memory_item_fts.item_id
                  JOIN memory_item_text t ON t.item_id = m.id
@@ -198,39 +202,40 @@ impl Db {
         sql.push_str(" ORDER BY rank ASC, m.importance DESC, m.updated_at DESC LIMIT ?");
 
         let mut stmt = conn.prepare(&sql).await?;
+        let candidate_limit = (limit.saturating_mul(5)).max(20) as i64;
         let mut rows = if use_fts && sources.is_empty() {
-            let fts_query = build_fts_query(&normalized_query);
-            stmt.query(libsql::params![fts_query, namespace_id, limit as i64])
+            stmt.query(libsql::params![fts_query, namespace_id, candidate_limit])
                 .await?
         } else if use_fts {
-            let fts_query = build_fts_query(&normalized_query);
             let source_json = serde_json::to_string(sources)?;
             stmt.query(libsql::params![
                 fts_query,
                 namespace_id,
                 source_json,
-                limit as i64
+                candidate_limit
             ])
             .await?
         } else if sources.is_empty() {
-            stmt.query(libsql::params![namespace_id, limit as i64])
+            stmt.query(libsql::params![namespace_id, candidate_limit])
                 .await?
         } else {
             let source_json = serde_json::to_string(sources)?;
-            stmt.query(libsql::params![namespace_id, source_json, limit as i64])
+            stmt.query(libsql::params![namespace_id, source_json, candidate_limit])
                 .await?
         };
-        let mut hits = Vec::new();
+        let mut candidates = Vec::new();
         while let Some(row) = rows.next().await? {
-            hits.push(MemoryRecallHit {
+            candidates.push(RecallCandidate {
                 source_type: row.get(1)?,
                 source_id: row.get(3)?,
                 content: row.get(4)?,
-                score: 1.0 / (1.0 + row.get::<f64>(7)?),
                 citation: row.get(5)?,
+                importance: row.get(6)?,
+                updated_at: row.get(7)?,
+                bm25_rank: row.get(8)?,
             });
         }
-        Ok(hits)
+        Ok(rerank_candidates(candidates, &query_terms, query, limit))
     }
 }
 
@@ -269,6 +274,17 @@ pub struct MemoryRecallHit {
     pub content: String,
     pub score: f64,
     pub citation: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RecallCandidate {
+    source_type: String,
+    source_id: String,
+    content: String,
+    citation: Option<String>,
+    importance: i64,
+    updated_at: String,
+    bm25_rank: f64,
 }
 
 pub fn build_memory_item(
@@ -341,23 +357,127 @@ fn build_search_document(
     parts.join("\n")
 }
 
-fn build_fts_query(normalized_query: &str) -> String {
-    let terms = normalized_query
-        .split_whitespace()
+fn build_fts_query(terms: &[String]) -> String {
+    let terms = terms
+        .iter()
         .filter(|term| term.len() > 1)
         .map(|term| {
             if term.len() >= 4 {
                 format!("{}*", term)
             } else {
-                term.to_string()
+                term.clone()
             }
         })
         .collect::<Vec<_>>();
     if terms.is_empty() {
-        normalized_query.to_string()
+        String::new()
     } else {
         terms.join(" OR ")
     }
+}
+
+fn tokenize_terms(normalized_query: &str) -> Vec<String> {
+    normalized_query
+        .split_whitespace()
+        .filter(|term| !term.is_empty())
+        .map(|term| term.to_string())
+        .collect()
+}
+
+fn expand_query_terms(terms: &[String]) -> Vec<String> {
+    let mut expanded = Vec::new();
+    for term in terms {
+        push_unique(&mut expanded, term.clone());
+        for synonym in query_synonyms(term) {
+            push_unique(&mut expanded, synonym.to_string());
+        }
+    }
+    expanded
+}
+
+fn query_synonyms(term: &str) -> &'static [&'static str] {
+    match term {
+        "detailed" | "detail" | "details" | "verbose" | "wordy" | "lengthy" => {
+            &["detailed", "verbose", "long", "expanded"]
+        }
+        "explain" | "explains" | "explained" | "explanation" | "why" => {
+            &["explanation", "reason", "because", "why"]
+        }
+        "preference" | "prefer" | "prefers" | "preferred" => {
+            &["prefer", "prefers", "preference", "likes"]
+        }
+        "remember" | "recall" | "memory" => &["remember", "recall", "memory", "recollect"],
+        "short" | "brief" | "concise" => &["short", "brief", "concise", "succinct"],
+        _ => &[],
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, candidate: String) {
+    if !values.iter().any(|existing| existing == &candidate) {
+        values.push(candidate);
+    }
+}
+
+fn rerank_candidates(
+    mut candidates: Vec<RecallCandidate>,
+    query_terms: &[String],
+    query: &str,
+    limit: usize,
+) -> Vec<MemoryRecallHit> {
+    let query_phrase = normalize_text(query);
+    for candidate in &mut candidates {
+        candidate.bm25_rank = score_candidate(candidate, query_terms, &query_phrase);
+    }
+    candidates.sort_by(|a, b| {
+        b.bm25_rank
+            .partial_cmp(&a.bm25_rank)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.importance.cmp(&a.importance))
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+    });
+    candidates
+        .into_iter()
+        .take(limit)
+        .map(|candidate| MemoryRecallHit {
+            source_type: candidate.source_type,
+            source_id: candidate.source_id,
+            content: candidate.content,
+            score: candidate.bm25_rank,
+            citation: candidate.citation,
+        })
+        .collect()
+}
+
+fn score_candidate(candidate: &RecallCandidate, query_terms: &[String], query_phrase: &str) -> f64 {
+    let haystack = normalize_text(&candidate.content);
+    let mut score = 0.0;
+    if !query_phrase.is_empty() && haystack.contains(query_phrase) {
+        score += 6.0;
+    }
+    for term in query_terms {
+        if term.len() < 2 {
+            continue;
+        }
+        if haystack.contains(term) {
+            score += 2.0;
+        } else if has_prefix_match(&haystack, term) {
+            score += 1.25;
+        }
+        for synonym in query_synonyms(term) {
+            if haystack.contains(synonym) {
+                score += 1.5;
+            }
+        }
+    }
+    score += candidate.importance as f64 * 0.2;
+    score += candidate.bm25_rank.abs() * 0.1;
+    score
+}
+
+fn has_prefix_match(haystack: &str, term: &str) -> bool {
+    haystack
+        .split_whitespace()
+        .any(|candidate| candidate.starts_with(term) || term.starts_with(candidate))
 }
 
 pub async fn create_db<P: AsRef<Path>>(path: P) -> anyhow::Result<Db> {

@@ -1,0 +1,6 @@
+{
+  "id": "beu-memory",
+  "kind": "memory",
+  "name": "BeU Memory",
+  "description": "BetterClaw identity persistence and long-term memory using BeU binary"
+}

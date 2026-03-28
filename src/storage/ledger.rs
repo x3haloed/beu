@@ -133,3 +133,106 @@ impl Ledger {
         Ok(events)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Ledger;
+    use crate::storage::Db;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_ledger_operations() {
+        let tmp_dir = TempDir::new().unwrap();
+        let db_path = tmp_dir.path().join("test.db");
+        let db = Db::open(&db_path).await.unwrap();
+
+        let ledger = Ledger::new(db);
+
+        // Create thread
+        let thread_id = ledger
+            .create_thread("test-agent", "cli", "test-session")
+            .await
+            .unwrap();
+        assert!(!thread_id.is_empty());
+
+        // Create turn
+        let turn_id = ledger.create_turn(&thread_id, "Hello world").await.unwrap();
+        assert!(!turn_id.is_empty());
+
+        // Append event
+        let event_id = ledger
+            .append_event(&turn_id, &thread_id, "user_turn", r#"{"content": "Hello"}"#)
+            .await
+            .unwrap();
+        assert!(!event_id.is_empty());
+
+        // Get events
+        let events = ledger.get_thread_events(&thread_id).await.unwrap();
+        assert_eq!(events.len(), 1);
+
+        let event = &events[0];
+        assert_eq!(event.kind, "user_turn");
+        assert_eq!(event.thread_id, thread_id);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_events_sequence() {
+        let tmp_dir = TempDir::new().unwrap();
+        let db_path = tmp_dir.path().join("test.db");
+        let db = Db::open(&db_path).await.unwrap();
+        let ledger = Ledger::new(db);
+
+        let thread_id = ledger
+            .create_thread("test-agent", "cli", "test-session")
+            .await
+            .unwrap();
+        let turn_id = ledger.create_turn(&thread_id, "Test").await.unwrap();
+
+        // Add multiple events
+        ledger
+            .append_event(&turn_id, &thread_id, "user_turn", r#"{"content": "Hello"}"#)
+            .await
+            .unwrap();
+        ledger
+            .append_event(
+                &turn_id,
+                &thread_id,
+                "agent_turn",
+                r#"{"content": "Hi there"}"#,
+            )
+            .await
+            .unwrap();
+        ledger
+            .append_event(&turn_id, &thread_id, "tool_call", r#"{"name": "search"}"#)
+            .await
+            .unwrap();
+
+        let events = ledger.get_thread_events(&thread_id).await.unwrap();
+        assert_eq!(events.len(), 3);
+
+        // Verify sequence order
+        assert_eq!(events[0].sequence, 1);
+        assert_eq!(events[1].sequence, 2);
+        assert_eq!(events[2].sequence, 3);
+    }
+
+    #[tokio::test]
+    async fn test_different_agent_ids() {
+        let tmp_dir = TempDir::new().unwrap();
+        let db_path = tmp_dir.path().join("test.db");
+        let db = Db::open(&db_path).await.unwrap();
+        let ledger = Ledger::new(db);
+
+        let thread1 = ledger
+            .create_thread("agent-1", "cli", "session-1")
+            .await
+            .unwrap();
+        let thread2 = ledger
+            .create_thread("agent-2", "cli", "session-1")
+            .await
+            .unwrap();
+
+        // Different agents can have same external_thread_id
+        assert_ne!(thread1, thread2);
+    }
+}

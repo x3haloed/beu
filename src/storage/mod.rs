@@ -4,6 +4,7 @@ pub mod migrations;
 use libsql::{Builder, Connection, Database};
 use std::path::Path;
 use tokio::sync::Mutex;
+use tracing::{debug, error};
 
 pub struct Db {
     database: Database,
@@ -12,12 +13,27 @@ pub struct Db {
 
 impl Db {
     pub async fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        let database = Builder::new_local(path.as_ref()).build().await?;
+        let path_str = path.as_ref().to_string_lossy().to_string();
+        debug!(path = %path_str, "Opening database");
+        let database = Builder::new_local(&path_str).build().await?;
         let db = Self {
             database,
             write_lock: Mutex::new(()),
         };
         db.initialize().await?;
+        debug!("Database initialized successfully");
+        Ok(db)
+    }
+
+    pub async fn open_in_memory() -> anyhow::Result<Self> {
+        debug!("Opening in-memory database");
+        let database = Builder::new_local(":memory:").build().await?;
+        let db = Self {
+            database,
+            write_lock: Mutex::new(()),
+        };
+        db.initialize().await?;
+        debug!("In-memory database initialized");
         Ok(db)
     }
 
@@ -35,12 +51,14 @@ impl Db {
     }
 
     pub async fn initialize(&self) -> anyhow::Result<()> {
-        migrations::run(self).await?;
+        if let Err(e) = migrations::run(self).await {
+            error!(error = %e, "Failed to run migrations");
+            return Err(e);
+        }
         Ok(())
     }
 }
 
 pub async fn create_db<P: AsRef<Path>>(path: P) -> anyhow::Result<Db> {
-    let db = Db::open(path).await?;
-    Ok(db)
+    Db::open(path).await
 }

@@ -26,7 +26,9 @@ impl Db {
         Ok(conn)
     }
 
-    pub async fn write_connection(&self) -> anyhow::Result<(tokio::sync::MutexGuard<'_, ()>, Connection)> {
+    pub async fn write_connection(
+        &self,
+    ) -> anyhow::Result<(tokio::sync::MutexGuard<'_, ()>, Connection)> {
         let guard = self.write_lock.lock().await;
         let conn = self.connect().await?;
         Ok((guard, conn))

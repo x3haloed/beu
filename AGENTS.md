@@ -56,8 +56,9 @@ src/
 └── types/              # Shared request/response and domain types
 
 tests/
-├── *.rs                # Rust integration tests for storage/protocol behavior
+├── *.rs                # Rust unit/integration tests for storage/protocol behavior
 └── e2e/                # End-to-end tests and harness docs
+    └── *.rs            # Rust e2e adapter tests with isolated temp homes/venvs
 ```
 
 ## Module Specs

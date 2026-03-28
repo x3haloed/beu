@@ -30,3 +30,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "beu"
 path = "src/main.rs"
+
+[[test]]
+name = "hermes_adapter_integration"
+path = "tests/e2e/hermes_adapter_integration.rs"

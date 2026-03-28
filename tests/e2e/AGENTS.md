@@ -1,6 +1,8 @@
 # BeU E2E Tests
 
-End-to-end tests for the BeU protocol and any future host-facing adapters.
+End-to-end tests for the BeU protocol and host-facing adapters.
+This directory may contain Python or Rust e2e suites; keep them local-first,
+isolated, and deterministic.
 
 ## Scope
 
@@ -13,7 +15,7 @@ End-to-end tests for the BeU protocol and any future host-facing adapters.
 ```bash
 cd tests/e2e
 
-# Create virtualenv (one-time)
+# Create virtualenv (one-time, when the suite needs Python deps)
 python -m venv .venv
 source .venv/bin/activate   # or .venv\Scripts\activate on Windows
 
@@ -46,6 +48,9 @@ pytest scenarios/ --timeout=60
 
 # Run with a headed browser, if applicable
 HEADED=1 pytest scenarios/
+
+# Run Rust e2e tests from the repo root when present
+cargo test --test hermes_adapter_integration -- --nocapture
 ```
 
 ## Test Scenarios
@@ -67,6 +72,7 @@ Keep shared constants and fixtures in one place. Import selectors, protocol cons
 - Use `httpx.AsyncClient` for direct HTTP calls when an adapter exposes HTTP.
 - Use `aiohttp` or the lightest available async client for SSE only when the scenario needs streaming.
 - Use the commands from `SPEC.md`: `distill`, `recall`, `rebuild`, `identity`, `index`, and `status`.
+- For Rust e2e adapter tests, use isolated temp homes/venvs and real subprocess execution. Keep dependency installs contained to the test fixture.
 
 ## Writing New Scenarios
 
@@ -74,6 +80,7 @@ Keep shared constants and fixtures in one place. Import selectors, protocol cons
 2. Use the narrowest fixture that exercises the behavior.
 3. Keep assertions focused on observable protocol output.
 4. Add regression coverage for any bug fix.
+5. For Rust e2e adapter coverage, add `tests/e2e/*.rs` tests that exercise the real host/plugin boundary.
 
 ## Gotchas
 

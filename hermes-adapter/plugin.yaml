@@ -1,0 +1,13 @@
+name: beu
+version: "0.1.0"
+description: BetterClaw memory plugin for Hermes - identity persistence, continuous learning, and long-term memory
+author: ""
+requires_env: []
+provides_tools:
+  - beu_recall
+  - beu_distill
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+  - on_session_start
+  - on_session_end

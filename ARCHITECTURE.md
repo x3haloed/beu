@@ -163,6 +163,8 @@ The binary is stateless. The adapter is stateful. This matches the Claude Code t
 
 The adapter is the "glue" - it implements what the host expects while delegating to the binary.
 
+For Hermes specifically, one likely onboarding path is a setup script that writes the host's Honcho config and enables "honcho mode" for the Hermes peer. That would suppress local `MEMORY.md` writes for that peer while leaving the BeU adapter in control of memory behavior, without requiring changes to hermes-agent itself.
+
 **For OpenClaw:**
 ```
 ┌─────────────────────────────────────────────┐

@@ -43,6 +43,8 @@ Host-specific adapters live in separate repos:
 - `beu-hermes` - Hermes-agent (Python)
 - `beu-openclaw` - OpenClaw (TypeScript)
 
+Note: the Hermes adapter may eventually ship a friendly setup path that writes Hermes/Honcho config for the host, including a "honcho mode" option that suppresses local `MEMORY.md` writes for that peer. That would let BeU take the foreground without requiring changes to hermes-agent itself.
+
 ## License
 
 MIT or Apache-2.0

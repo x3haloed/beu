@@ -138,8 +138,8 @@ export default definePluginEntry({
     api.registerMemoryRuntime(buildBeuRuntime());
 
     api.registerTool(
-      (ctx) => {
-        const { createBeuRecallTool } = require("./tools/recall.js");
+      async (ctx) => {
+        const { createBeuRecallTool } = await import("./tools/recall.js");
         return createBeuRecallTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
@@ -149,8 +149,8 @@ export default definePluginEntry({
     );
 
     api.registerTool(
-      (ctx) => {
-        const { createBeuDistillTool } = require("./tools/distill.js");
+      async (ctx) => {
+        const { createBeuDistillTool } = await import("./tools/distill.js");
         return createBeuDistillTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,

@@ -1,0 +1,8 @@
+{
+  "name": "beu-openclaw-adapter",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "jsonrpc-lite": "^2.2.0"
+  }
+}

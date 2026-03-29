@@ -60,15 +60,15 @@ export class BeuProcess {
     this.namespace = options.namespace || "default";
   }
 
-  private async call(command: string, payload: Record<string, unknown>): Promise<jsonrpc.JsonRpcObject> {
+  private async call(command: string, payload: Record<string, unknown>): Promise<any> {
     return new Promise((resolve, reject) => {
-      const request = jsonrpc.request(command, {
+      const request = {
         version: "1.0.0",
-        command,
         id: `${command}-${Date.now()}`,
+        command,
         namespace: this.namespace,
         payload,
-      });
+      };
 
       const proc = spawn(this.binaryPath, [], {
         stdio: ["pipe", "pipe", "pipe"],
@@ -92,8 +92,7 @@ export class BeuProcess {
         }
 
         try {
-          const response = JSON.parse(stdout.trim());
-          resolve(response);
+          resolve(JSON.parse(stdout.trim()));
         } catch (error) {
           reject(new Error(`Invalid JSON response: ${stdout}`));
         }
@@ -115,13 +114,7 @@ export class BeuProcess {
       sources: options.sources || ["invariant", "fact", "wake_pack"],
     };
 
-    const response = await this.call("recall", payload);
-
-    if (response instanceof jsonrpc.JsonRpcError) {
-      throw new Error(response.error.message);
-    }
-
-    const result = response.payload as { ok: boolean; data?: { hits: BeuRecallHit[] }; error?: string };
+    const result = await this.call("recall", payload);
 
     if (!result.ok) {
       throw new Error(result.error || "Recall failed");
@@ -133,13 +126,7 @@ export class BeuProcess {
   async identity(query: string = "all"): Promise<BeuIdentityResult> {
     const payload = { query, limit: 10 };
 
-    const response = await this.call("identity", payload);
-
-    if (response instanceof jsonrpc.JsonRpcError) {
-      throw new Error(response.error.message);
-    }
-
-    const result = response.payload as { ok: boolean; data?: BeuIdentityResult; error?: string };
+    const result = await this.call("identity", payload);
 
     if (!result.ok) {
       throw new Error(result.error || "Identity query failed");
@@ -151,13 +138,7 @@ export class BeuProcess {
   async status(): Promise<BeuStatusResult> {
     const payload = {};
 
-    const response = await this.call("status", payload);
-
-    if (response instanceof jsonrpc.JsonRpcError) {
-      throw new Error(response.error.message);
-    }
-
-    const result = response.payload as { ok: boolean; data?: BeuStatusResult; error?: string };
+    const result = await this.call("status", payload);
 
     if (!result.ok) {
       throw new Error(result.error || "Status check failed");
@@ -190,21 +171,31 @@ export class BeuProcess {
     facts: unknown[];
     invariant_adds: unknown[];
   }> {
+    const distilledContent = threadHistory
+      .map((entry) => entry.content)
+      .filter((content) => content.trim().length > 0)
+      .join("\n\n");
     const payload = {
+      namespace: this.namespace,
       thread_id: threadId,
       turn_id: turnId,
-      thread_history: threadHistory,
+      wake_pack: {
+        content: distilledContent,
+        summary: distilledContent.slice(0, 200),
+      },
+      facts: [],
+      invariant_adds: [],
       prior_wake_pack: options?.prior_wake_pack || {},
       active_invariants: options?.active_invariants || [],
     };
 
-    const response = await this.call("distill", payload);
+    const result = await this.call("distill", payload);
 
-    if (response instanceof jsonrpc.JsonRpcError) {
-      throw new Error(response.error.message);
+    if (result instanceof jsonrpc.JsonRpcError) {
+      throw new Error(result.error.message);
     }
 
-    const result = response.payload as {
+    const data = result as {
       ok: boolean;
       data?: {
         wake_pack: { content: string; summary: string };
@@ -214,14 +205,40 @@ export class BeuProcess {
       error?: string;
     };
 
-    if (!result.ok) {
-      throw new Error(result.error || "Distill failed");
+    if (!data.ok) {
+      throw new Error(data.error || "Distill failed");
     }
 
-    return result.data || {
-      wake_pack: { content: "", summary: "" },
-      facts: [],
-      invariant_adds: [],
+    const normalized = data.data || {};
+    const indexResult = await this.call("index", {
+      namespace: this.namespace,
+      embed: false,
+      entries: [
+        {
+          entry_id: turnId,
+          source_type: "wake_pack",
+          source_id: threadId,
+          content: distilledContent,
+          metadata: {
+            kind: "wake_pack",
+            thread_id: threadId,
+            turn_id: turnId,
+          },
+        },
+      ],
+    });
+
+    if (!indexResult.ok) {
+      throw new Error(indexResult.error || "Indexing distilled memory failed");
+    }
+
+    return {
+      wake_pack: normalized.wake_pack || {
+        content: distilledContent,
+        summary: distilledContent.slice(0, 200),
+      },
+      facts: normalized.facts || [],
+      invariant_adds: normalized.invariant_adds || [],
     };
   }
 }

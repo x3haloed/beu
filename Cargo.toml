@@ -38,3 +38,7 @@ path = "tests/e2e/hermes_adapter_loader.rs"
 [[test]]
 name = "hermes_adapter_contract"
 path = "tests/e2e/hermes_adapter_contract.rs"
+
+[[test]]
+name = "openclaw_adapter"
+path = "tests/e2e/openclaw_adapter.rs"

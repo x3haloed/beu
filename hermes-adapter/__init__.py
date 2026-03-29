@@ -40,6 +40,13 @@ HERMES_HOME = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")
 
 # Default namespace for single-agent Hermes (no multi-agent support)
 DEFAULT_NAMESPACE = "default"
+SUPPORTED_EMBEDDING_PROVIDERS = {
+    "openai",
+    "openrouter",
+    "custom",
+    "google",
+    "mistral",
+}
 
 
 class BeuProcess:
@@ -302,6 +309,88 @@ def _resolve_namespace(kwargs: dict) -> str:
     )
 
 
+def _resolve_embedding_provider(*, namespace: str, kwargs: dict) -> Optional[dict]:
+    """Resolve a provider/config block suitable for BeU embeddings.
+
+    Hermes does not have a dedicated embeddings config today, so we reuse the
+    active model/provider configuration and named custom providers when they
+    supply a usable OpenAI-compatible endpoint.
+    """
+    try:
+        from hermes_cli.config import load_config
+        from hermes_cli.runtime_provider import (
+            _get_named_custom_provider,
+            resolve_requested_provider,
+            resolve_runtime_provider,
+        )
+    except Exception as exc:
+        logger.warning(f"Embedding provider resolution unavailable: {exc}")
+        return None
+
+    config = load_config()
+    model_cfg = config.get("model") if isinstance(config.get("model"), dict) else {}
+    requested = kwargs.get("provider") or resolve_requested_provider()
+    named_custom = _get_named_custom_provider(requested) if isinstance(requested, str) else None
+    runtime = None
+
+    # Prefer explicit direct endpoint overrides from the model config.
+    base_url = str(model_cfg.get("base_url") or "").strip()
+    api_key = str(model_cfg.get("api_key") or model_cfg.get("api") or "").strip()
+    provider = str(model_cfg.get("provider") or "").strip().lower()
+    model = str(model_cfg.get("default") or model_cfg.get("model") or "").strip()
+
+    if named_custom and named_custom.get("base_url"):
+        runtime = {
+            "provider": "custom",
+            "base_url": str(named_custom.get("base_url") or "").strip().rstrip("/"),
+            "api_key": str(named_custom.get("api_key") or "").strip(),
+            "model": str(named_custom.get("model") or "").strip() or model,
+        }
+    elif base_url:
+        runtime = {
+            "provider": provider or "custom",
+            "base_url": base_url.rstrip("/"),
+            "api_key": api_key,
+            "model": model,
+        }
+    else:
+        try:
+            runtime = resolve_runtime_provider(requested=requested)
+        except Exception as exc:
+            logger.debug(f"Failed to resolve Hermes runtime provider for embeddings: {exc}")
+            runtime = None
+
+    if not runtime:
+        return None
+
+    resolved_provider = str(runtime.get("provider") or "").strip().lower()
+    resolved_base_url = str(runtime.get("base_url") or "").strip()
+    resolved_api_key = str(runtime.get("api_key") or "").strip()
+    resolved_model = model or str(runtime.get("model") or "").strip()
+    if named_custom and not resolved_model:
+        resolved_model = str(named_custom.get("model") or "").strip()
+
+    if resolved_provider not in SUPPORTED_EMBEDDING_PROVIDERS and not resolved_base_url:
+        return None
+
+    if resolved_provider == "custom" and not resolved_base_url:
+        return None
+
+    if not resolved_model:
+        return None
+
+    embedding_provider = {
+        "provider": resolved_provider or "custom",
+        "model": resolved_model,
+    }
+    if resolved_base_url:
+        embedding_provider["base_url"] = resolved_base_url
+    if resolved_api_key:
+        embedding_provider["api_key"] = resolved_api_key
+
+    return embedding_provider
+
+
 def _index_entry(
     *,
     namespace: str,
@@ -311,13 +400,20 @@ def _index_entry(
     source_id: str,
     content: str,
     metadata: dict,
+    hook_kwargs: Optional[dict] = None,
 ) -> None:
     text = content.strip()
     if not text:
         return
     beu = get_beu()
+    embedding_provider = _resolve_embedding_provider(
+        namespace=namespace,
+        kwargs=hook_kwargs or {},
+    )
     payload = {
         "namespace": namespace,
+        "embed": bool(embedding_provider),
+        "embedding_provider": embedding_provider,
         "entries": [
             {
                 "entry_id": entry_id,
@@ -359,6 +455,7 @@ def pre_llm_call_hook(messages: list, **kwargs) -> Optional[str]:
                 "model": kwargs.get("model"),
                 "platform": kwargs.get("platform"),
             },
+            hook_kwargs=kwargs,
         )
 
     try:
@@ -391,6 +488,7 @@ def post_llm_call_hook(response: str, messages: list, **kwargs) -> Optional[dict
                 "model": kwargs.get("model"),
                 "platform": kwargs.get("platform"),
             },
+            hook_kwargs=kwargs,
         )
     return None
 
@@ -410,6 +508,7 @@ def post_tool_call_hook(tool_name: str, args: dict, result: Any, task_id: str, *
             "task_id": task_id,
             "tool_call_id": kwargs.get("tool_call_id"),
         },
+        hook_kwargs=kwargs,
     )
 
 

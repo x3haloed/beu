@@ -4,6 +4,11 @@ use crate::storage::{
 };
 use crate::types::{Command, ErrorCode, Request, Response};
 use anyhow::{Context, Result};
+use aisdk::core::embedding_model::{EmbeddingModel, EmbeddingModelOptions, EmbeddingModelResponse};
+use aisdk::core::DynamicModel;
+use aisdk::Result as AisdkResult;
+use aisdk::providers::{Google, OpenAI, OpenAICompatible};
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -62,8 +67,6 @@ struct IndexEntryPayload {
     source_id: String,
     content: String,
     #[serde(default)]
-    embedding: Option<Vec<f32>>,
-    #[serde(default)]
     metadata: Value,
 }
 
@@ -71,7 +74,21 @@ struct IndexEntryPayload {
 struct IndexPayload {
     #[serde(default)]
     namespace: Option<String>,
+    #[serde(default)]
+    embed: bool,
+    #[serde(default)]
+    embedding_provider: Option<EmbeddingProviderPayload>,
     entries: Vec<IndexEntryPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbeddingProviderPayload {
+    provider: String,
+    model: String,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -600,7 +617,18 @@ impl Protocol {
         };
         let ns = parsed.namespace.unwrap_or(namespace);
         let mut indexed = 0usize;
-        for entry in parsed.entries {
+        let embeddings = if parsed.embed {
+            match embed_entries(parsed.embedding_provider.as_ref(), &parsed.entries).await {
+                Ok(embeddings) => embeddings,
+                Err(e) => {
+                    debug!(error = %e, "embedding generation failed; continuing with FTS only");
+                    vec![None; parsed.entries.len()]
+                }
+            }
+        } else {
+            vec![None; parsed.entries.len()]
+        };
+        for (entry, embedding) in parsed.entries.into_iter().zip(embeddings.into_iter()) {
             let entry_type = entry.source_type.clone();
             let summary = Some(entry.content.clone());
             let (item, text) = build_memory_item(
@@ -617,7 +645,7 @@ impl Protocol {
                     "metadata": entry.metadata,
                 }),
                 5,
-                entry.embedding,
+                embedding,
             );
             if let Err(e) = db.upsert_memory_item(item, text).await {
                 return Response::err(
@@ -724,6 +752,100 @@ impl Protocol {
                 ErrorCode::NOT_FOUND,
             ),
         }
+    }
+}
+
+async fn embed_entries(
+    provider: Option<&EmbeddingProviderPayload>,
+    entries: &[IndexEntryPayload],
+) -> Result<Vec<Option<Vec<f32>>>> {
+    let Some(provider) = provider else {
+        return Ok(vec![None; entries.len()]);
+    };
+    if provider.provider.trim().is_empty() || provider.model.trim().is_empty() {
+        return Ok(vec![None; entries.len()]);
+    }
+    let api_key = provider.api_key.clone().unwrap_or_default();
+    let base_url = provider.base_url.clone().unwrap_or_default();
+    if api_key.trim().is_empty() || base_url.trim().is_empty() {
+        return Ok(vec![None; entries.len()]);
+    }
+
+    let model = build_embeddings_model(&provider.provider, &provider.model, &base_url, &api_key)
+        .context("failed to build embeddings provider")?;
+    let request = EmbeddingModelOptions::builder()
+        .input(entries.iter().map(|entry| entry.content.clone()).collect())
+        .build()
+        .context("failed to build embedding request")?;
+    let response: Vec<Vec<f32>> = model
+        .embed(request)
+        .await
+        .context("embedding request failed")?;
+    Ok(response.into_iter().map(Some).collect())
+}
+
+#[derive(Debug, Clone)]
+enum EmbeddingsProviderModel {
+    OpenAI(OpenAI<DynamicModel>),
+    Google(Google<DynamicModel>),
+    OpenAICompatible(OpenAICompatible<DynamicModel>),
+}
+
+#[async_trait]
+impl EmbeddingModel for EmbeddingsProviderModel {
+    async fn embed(&self, input: EmbeddingModelOptions) -> AisdkResult<EmbeddingModelResponse> {
+        match self {
+            Self::OpenAI(model) => model.embed(input).await,
+            Self::Google(model) => model.embed(input).await,
+            Self::OpenAICompatible(model) => model.embed(input).await,
+        }
+    }
+}
+
+fn build_embeddings_model(
+    provider_name: &str,
+    model_name: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Result<EmbeddingsProviderModel, anyhow::Error> {
+    let provider_name = provider_name.trim().to_lowercase();
+    match provider_name.as_str() {
+        "openai" => Ok(EmbeddingsProviderModel::OpenAI(
+            OpenAI::<DynamicModel>::builder()
+                .provider_name("openai")
+                .model_name(model_name.to_string())
+                .base_url(base_url.to_string())
+                .api_key(api_key.to_string())
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        )),
+        "google" | "gemini" => Ok(EmbeddingsProviderModel::Google(
+            Google::<DynamicModel>::builder()
+                .provider_name("google")
+                .model_name(model_name.to_string())
+                .base_url(base_url.to_string())
+                .api_key(api_key.to_string())
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        )),
+        "mistral" | "openrouter" => Ok(EmbeddingsProviderModel::OpenAICompatible(
+            OpenAICompatible::<DynamicModel>::builder()
+                .provider_name(provider_name)
+                .model_name(model_name.to_string())
+                .base_url(base_url.to_string())
+                .api_key(api_key.to_string())
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        )),
+        _ => Ok(EmbeddingsProviderModel::OpenAICompatible(
+            OpenAICompatible::<DynamicModel>::builder()
+                .provider_name(provider_name)
+                .model_name(model_name.to_string())
+                .base_url(base_url.to_string())
+                .api_key(api_key.to_string())
+                .build()
+                .map_err(|e| anyhow::anyhow!(e))?,
+        )),
     }
 }
 

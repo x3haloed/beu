@@ -44,7 +44,7 @@ async function indexTextEntry(params: {
   sourceId: string;
   content: string;
   metadata: Record<string, unknown>;
-  embedding?: number[];
+  embeddingProvider?: EmbeddingProviderConfig;
 }) {
   const text = params.content.trim();
   if (!text) {
@@ -58,20 +58,42 @@ async function indexTextEntry(params: {
         source_type: params.sourceType,
         source_id: params.sourceId,
         content: truncateText(text),
-        embedding: params.embedding,
         metadata: {
           ...params.metadata,
           thread_id: params.threadId,
         },
       },
     ],
-    { namespace: params.namespace, embed: false },
+    {
+      namespace: params.namespace,
+      embed: Boolean(params.embeddingProvider),
+      embeddingProvider: params.embeddingProvider
+        ? {
+            provider: params.embeddingProvider.provider,
+            model: params.embeddingProvider.model,
+            base_url: params.embeddingProvider.base_url,
+            api_key: params.embeddingProvider.api_key,
+            headers: params.embeddingProvider.headers,
+            output_dimensionality: params.embeddingProvider.output_dimensionality,
+          }
+        : undefined,
+    },
   );
 }
 
 type EmbeddingCandidate = {
   pluginId: string;
   provider: RegisteredMemoryEmbeddingProvider;
+};
+
+type EmbeddingProviderConfig = {
+  provider: string;
+  model: string;
+  base_url?: string;
+  api_key?: string;
+  headers?: Record<string, string>;
+  output_dimensionality?: number;
+  pluginId: string;
 };
 
 function resolvePreferredMemoryPluginId(cfg: OpenClawConfig): string | undefined {
@@ -100,13 +122,62 @@ function listMemoryPluginIds(params: { cfg: OpenClawConfig; agentId: string }): 
   return Array.from(ordered);
 }
 
+function resolveMemorySearchConfigForEmbeddingCandidates(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}) {
+  const normalizedAgentId = params.agentId.trim().toLowerCase();
+  const agentMemorySearch = params.cfg.agents?.list?.find(
+    (entry) => entry?.id?.trim().toLowerCase() === normalizedAgentId,
+  )?.memorySearch;
+  if (agentMemorySearch && hasEmbeddingsConfigured(agentMemorySearch)) {
+    return agentMemorySearch;
+  }
+  return params.cfg.agents?.defaults?.memorySearch;
+}
+
+function hasEmbeddingsConfigured(memorySearch?: {
+  provider?: string;
+  model?: string;
+  remote?: { baseUrl?: string; apiKey?: string; headers?: Record<string, string> };
+  local?: { modelPath?: string };
+}) {
+  if (!memorySearch) {
+    return false;
+  }
+  if (memorySearch.provider && memorySearch.provider.trim() !== "auto") {
+    return true;
+  }
+  if (memorySearch.remote?.baseUrl || memorySearch.remote?.apiKey) {
+    return true;
+  }
+  if (memorySearch.local?.modelPath) {
+    return true;
+  }
+  return false;
+}
+
 function findEmbeddingCandidates(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): EmbeddingCandidate[] {
+  const memorySearch = resolveMemorySearchConfigForEmbeddingCandidates(params);
   const pluginIds = listMemoryPluginIds(params);
   const providers = listRegisteredMemoryEmbeddingProviders();
+  const configuredProviderId = memorySearch?.provider?.trim();
   const candidates: EmbeddingCandidate[] = [];
+  if (configuredProviderId && configuredProviderId !== "auto") {
+    for (const pluginId of pluginIds) {
+      for (const provider of providers) {
+        if (provider.ownerPluginId === pluginId && provider.adapter.id === configuredProviderId) {
+          candidates.push({ pluginId, provider });
+        }
+      }
+    }
+    if (candidates.length > 0) {
+      return candidates;
+    }
+  }
   for (const pluginId of pluginIds) {
     for (const provider of providers) {
       if (provider.ownerPluginId === pluginId) {
@@ -123,53 +194,54 @@ function findEmbeddingCandidates(params: {
   }));
 }
 
-async function embedWithBestAvailableProvider(params: {
+function resolveEmbeddingProviderConfig(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  text: string;
-}): Promise<{ embedding?: number[]; providerId?: string; pluginId?: string }> {
+}): EmbeddingProviderConfig | undefined {
   const memorySearch = resolveMemorySearchConfig(params.cfg, params.agentId);
   const candidates = findEmbeddingCandidates(params);
 
-  for (const candidate of candidates) {
-    try {
-      const created = await candidate.provider.adapter.create({
-        config: params.cfg,
-        model: memorySearch?.model || "",
-        remote: memorySearch?.remote
-          ? {
-              baseUrl: memorySearch.remote.baseUrl,
-              apiKey: memorySearch.remote.apiKey,
-              headers: memorySearch.remote.headers,
-            }
-          : undefined,
-        local: memorySearch?.local
-          ? {
-              modelPath: memorySearch.local.modelPath,
-              modelCacheDir: memorySearch.local.modelCacheDir,
-            }
-          : undefined,
-        outputDimensionality: memorySearch?.outputDimensionality,
-      });
-      if (!created.provider) {
-        continue;
-      }
-      return {
-        embedding: await created.provider.embedQuery(params.text),
-        providerId: candidate.provider.adapter.id,
-        pluginId: candidate.pluginId,
-      };
-    } catch (error) {
-      console.error("BeU embedding candidate failed", {
-        agentId: params.agentId,
-        pluginId: candidate.pluginId,
-        providerId: candidate.provider.adapter.id,
-        error,
-      });
+  if (memorySearch?.provider && memorySearch.provider !== "auto") {
+    const providerConfig: EmbeddingProviderConfig = {
+      provider: memorySearch.provider,
+      model: memorySearch.model || "",
+      pluginId: "configured",
+    };
+    if (memorySearch.remote) {
+      providerConfig.base_url = memorySearch.remote.baseUrl;
+      providerConfig.api_key = memorySearch.remote.apiKey;
+      providerConfig.headers = memorySearch.remote.headers;
     }
+    if (memorySearch.local) {
+      providerConfig.model = memorySearch.local.modelPath || providerConfig.model;
+    }
+    if (typeof memorySearch.outputDimensionality === "number") {
+      providerConfig.output_dimensionality = memorySearch.outputDimensionality;
+    }
+    return providerConfig;
   }
 
-  return {};
+  const selected = candidates[0];
+  if (!selected) {
+    return undefined;
+  }
+  const providerConfig: EmbeddingProviderConfig = {
+    provider: selected.provider.adapter.id,
+    model: memorySearch?.model || selected.provider.defaultModel || "",
+    pluginId: selected.pluginId,
+  };
+  if (memorySearch?.remote) {
+    providerConfig.base_url = memorySearch.remote.baseUrl;
+    providerConfig.api_key = memorySearch.remote.apiKey;
+    providerConfig.headers = memorySearch.remote.headers;
+  }
+  if (memorySearch?.local) {
+    providerConfig.model = memorySearch.local.modelPath || providerConfig.model;
+  }
+  if (typeof memorySearch?.outputDimensionality === "number") {
+    providerConfig.output_dimensionality = memorySearch.outputDimensionality;
+  }
+  return providerConfig;
 }
 
 function buildBeuRuntime(): MemoryPluginRuntime {
@@ -289,13 +361,14 @@ export default definePluginEntry({
 
     api.registerHook("llm_input", async (event, ctx) => {
       const text = typeof event.prompt === "string" ? event.prompt : "";
-      const embedding = text.trim()
-        ? await embedWithBestAvailableProvider({
-            cfg: ctx.config || ctx.runtimeConfig || ({} as OpenClawConfig),
-            agentId: ctx.agentId || event.sessionId || "default",
-            text,
+      const cfg = ctx.config || ctx.runtimeConfig || ({} as OpenClawConfig);
+      const agentId = ctx.agentId || event.sessionId || "default";
+      const embeddingProvider = text.trim()
+        ? resolveEmbeddingProviderConfig({
+            cfg,
+            agentId,
           })
-        : {};
+        : undefined;
       await indexTextEntry({
         namespace: resolveNamespace(ctx),
         threadId: String(event.sessionId || event.runId || ctx.sessionKey || "default"),
@@ -310,19 +383,20 @@ export default definePluginEntry({
           model: event.model,
           images_count: event.imagesCount,
         },
-        embedding: embedding.embedding,
+        embeddingProvider,
       });
     });
 
     api.registerHook("llm_output", async (event, ctx) => {
       const content = (event.assistantTexts || []).join("\n\n");
-      const embedding = content.trim()
-        ? await embedWithBestAvailableProvider({
-            cfg: ctx.config || ctx.runtimeConfig || ({} as OpenClawConfig),
-            agentId: ctx.agentId || event.sessionId || "default",
-            text: content,
+      const cfg = ctx.config || ctx.runtimeConfig || ({} as OpenClawConfig);
+      const agentId = ctx.agentId || event.sessionId || "default";
+      const embeddingProvider = content.trim()
+        ? resolveEmbeddingProviderConfig({
+            cfg,
+            agentId,
           })
-        : {};
+        : undefined;
       await indexTextEntry({
         namespace: resolveNamespace(ctx),
         threadId: String(event.sessionId || event.runId || ctx.sessionKey || "default"),
@@ -336,10 +410,10 @@ export default definePluginEntry({
           provider: event.provider,
           model: event.model,
           usage: event.usage || {},
-          embedding_provider_id: embedding.providerId,
-          embedding_plugin_id: embedding.pluginId,
+          embedding_plugin_id: embeddingProvider?.pluginId,
+          embedding_provider_id: embeddingProvider?.provider,
         },
-        embedding: embedding.embedding,
+        embeddingProvider,
       });
     });
 
@@ -347,13 +421,14 @@ export default definePluginEntry({
       const rawResult = event.result ?? event.error ?? "";
       const content =
         typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult, null, 2);
-      const embedding = content.trim()
-        ? await embedWithBestAvailableProvider({
-            cfg: ctx.config || ctx.runtimeConfig || ({} as OpenClawConfig),
-            agentId: ctx.agentId || ctx.sessionId || "default",
-            text: content,
+      const cfg = ctx.config || ctx.runtimeConfig || ({} as OpenClawConfig);
+      const agentId = ctx.agentId || ctx.sessionId || "default";
+      const embeddingProvider = content.trim()
+        ? resolveEmbeddingProviderConfig({
+            cfg,
+            agentId,
           })
-        : {};
+        : undefined;
       await indexTextEntry({
         namespace: resolveNamespace(ctx),
         threadId: String(ctx.sessionId || ctx.runId || ctx.sessionKey || "default"),
@@ -367,10 +442,10 @@ export default definePluginEntry({
           run_id: event.runId,
           duration_ms: event.durationMs,
           error: event.error,
-          embedding_provider_id: embedding.providerId,
-          embedding_plugin_id: embedding.pluginId,
+          embedding_plugin_id: embeddingProvider?.pluginId,
+          embedding_provider_id: embeddingProvider?.provider,
         },
-        embedding: embedding.embedding,
+        embeddingProvider,
       });
     });
 

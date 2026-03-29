@@ -12,8 +12,16 @@ export interface BeuIndexEntry {
   source_type: string;
   source_id: string;
   content: string;
-  embedding?: number[];
   metadata?: Record<string, unknown>;
+}
+
+export interface BeuEmbeddingProvider {
+  provider: string;
+  model: string;
+  base_url?: string;
+  api_key?: string;
+  headers?: Record<string, string>;
+  output_dimensionality?: number;
 }
 
 export interface LedgerEntry {
@@ -101,11 +109,13 @@ export class BeuProcess {
     options?: {
       namespace?: string;
       embed?: boolean;
+      embeddingProvider?: BeuEmbeddingProvider;
     },
   ): Promise<{ indexed?: number; embeddings_generated?: number }> {
     return this.call("index", {
       namespace: options?.namespace || this.namespace,
       embed: options?.embed ?? false,
+      embedding_provider: options?.embeddingProvider,
       entries: entries.map((entry) => ({
         ...entry,
         metadata: entry.metadata || {},

@@ -32,6 +32,12 @@ E2E tests: see `tests/e2e/AGENTS.md`.
 - Keep functions focused, extract helpers when logic is reused
 - Comments for non-obvious logic only
 
+## Parity and Testing
+
+- If you change implementation any harness adapter, make sure you update all the others or at least flag it for the user.
+- Add the narrowest tests that validate the change: unit tests for local logic, integration tests for runtime/DB/routing behavior, and E2E or trace coverage for gateway, approvals, extensions, or other user-visible flows.
+
+
 ## Architecture
 
 Prefer generic/extensible architectures over hardcoding specific integrations. Ask clarifying questions about the desired abstraction level before implementing.

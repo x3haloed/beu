@@ -14,6 +14,14 @@ export interface BeuRecallOptions {
   sources?: string[];
 }
 
+export interface BeuIndexEntry {
+  entry_id: string;
+  source_type: string;
+  source_id: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface BeuRecallHit {
   source_type: string;
   source_id: string;
@@ -145,6 +153,29 @@ export class BeuProcess {
     }
 
     return result.data || { storage: "unknown" };
+  }
+
+  async index(
+    entries: BeuIndexEntry[],
+    options?: {
+      namespace?: string;
+      embed?: boolean;
+    },
+  ): Promise<{ indexed?: number; embeddings_generated?: number }> {
+    const result = await this.call("index", {
+      namespace: options?.namespace || this.namespace,
+      embed: options?.embed ?? false,
+      entries: entries.map((entry) => ({
+        ...entry,
+        metadata: entry.metadata || {},
+      })),
+    });
+
+    if (!result.ok) {
+      throw new Error(result.error || "Index failed");
+    }
+
+    return result.data || {};
   }
 
   async distill(

@@ -16,6 +16,7 @@ void (async () => {
     memoryPromptSections: [],
     memoryFlushPlans: [],
     memoryRuntimes: [],
+    hooks: [],
     tools: [],
   };
   entry.default.register({
@@ -27,6 +28,9 @@ void (async () => {
     },
     registerMemoryRuntime(runtime) {
       registrations.memoryRuntimes.push(runtime);
+    },
+    registerHook(events, handler, options) {
+      registrations.hooks.push({ events, handler, options });
     },
     registerTool(factory, options) {
       registrations.tools.push({
@@ -41,7 +45,7 @@ void (async () => {
     enabled: true,
     status: "loaded",
     tools: registrations.tools.length,
-    hooks: 0,
+    hooks: registrations.hooks.length,
     error: null,
   };
   console.log(JSON.stringify({
@@ -49,6 +53,7 @@ void (async () => {
     memoryPromptSections: registrations.memoryPromptSections.length,
     memoryFlushPlans: registrations.memoryFlushPlans.length,
     memoryRuntimes: registrations.memoryRuntimes.length,
+    hooks: registrations.hooks.length,
     tools: registrations.tools.map((tool) => tool.names),
   }, null, 2));
   process.exit(0);
@@ -74,11 +79,12 @@ void (async () => {
 
     assert_eq!(beu["enabled"], true, "beu plugin should load successfully");
     assert_eq!(beu["tools"], 2, "beu should register exactly two tools");
-    assert_eq!(beu["hooks"], 0, "beu memory plugin should not register hooks");
+    assert_eq!(beu["hooks"], 3, "beu memory plugin should register passive indexing hooks");
     assert!(beu["error"].is_null(), "beu plugin should not report an error");
     assert_eq!(payload["memoryPromptSections"], 1);
     assert_eq!(payload["memoryFlushPlans"], 1);
     assert_eq!(payload["memoryRuntimes"], 1);
+    assert_eq!(payload["hooks"], 3);
 }
 
 #[test]
@@ -95,12 +101,16 @@ void (async () => {
   const entry = await import(pathToFileURL(path.join(beuAdapterDir, "index.ts")).href);
   const { createBeuProcess } = await import(pathToFileURL(path.join(beuAdapterDir, "beu-process.ts")).href);
   const registrations = {
+    hooks: [],
     tools: [],
   };
   entry.default.register({
     registerMemoryPromptSection() {},
     registerMemoryFlushPlan() {},
     registerMemoryRuntime() {},
+    registerHook(events, handler, options) {
+      registrations.hooks.push({ events, handler, options });
+    },
     registerTool(factory, options) {
       registrations.tools.push({
         factory,

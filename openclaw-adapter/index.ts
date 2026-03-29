@@ -22,6 +22,41 @@ interface BeuSearchManager extends RegisteredMemorySearchManager {
 
 const searchManagers: Map<string, BeuSearchManager> = new Map();
 
+function resolveNamespace(params: { sessionKey?: string; sessionId?: string; agentId?: string }): string {
+  return params.sessionKey || params.sessionId || params.agentId || "default";
+}
+
+function truncateText(value: string, max = 2000): string {
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
+async function indexTextEntry(params: {
+  namespace: string;
+  entryId: string;
+  sourceType: string;
+  sourceId: string;
+  content: string;
+  metadata: Record<string, unknown>;
+}) {
+  const text = params.content.trim();
+  if (!text) {
+    return;
+  }
+  const beu = createBeuProcess({ namespace: params.namespace });
+  await beu.index(
+    [
+      {
+        entry_id: params.entryId,
+        source_type: params.sourceType,
+        source_id: params.sourceId,
+        content: truncateText(text),
+        metadata: params.metadata,
+      },
+    ],
+    { namespace: params.namespace, embed: false },
+  );
+}
+
 function buildBeuRuntime(): MemoryPluginRuntime {
   return {
     async getMemorySearchManager(params: {
@@ -136,6 +171,63 @@ export default definePluginEntry({
     api.registerMemoryPromptSection(buildBeuPromptSectionBuilder());
     api.registerMemoryFlushPlan(buildBeuFlushPlan());
     api.registerMemoryRuntime(buildBeuRuntime());
+
+    api.registerHook("llm_input", async (event, ctx) => {
+      await indexTextEntry({
+        namespace: resolveNamespace(ctx),
+        entryId: `${event.sessionId}:${event.runId || "llm_input"}:user`,
+        sourceType: "ledger_entry",
+        sourceId: event.runId || event.sessionId,
+        content: typeof event.prompt === "string" ? event.prompt : "",
+        metadata: {
+          kind: "user_turn",
+          session_id: event.sessionId,
+          run_id: event.runId,
+          provider: event.provider,
+          model: event.model,
+          images_count: event.imagesCount,
+        },
+      });
+    });
+
+    api.registerHook("llm_output", async (event, ctx) => {
+      await indexTextEntry({
+        namespace: resolveNamespace(ctx),
+        entryId: `${event.sessionId}:${event.runId || "llm_output"}:assistant`,
+        sourceType: "ledger_entry",
+        sourceId: event.runId || event.sessionId,
+        content: (event.assistantTexts || []).join("\n\n"),
+        metadata: {
+          kind: "agent_turn",
+          session_id: event.sessionId,
+          run_id: event.runId,
+          provider: event.provider,
+          model: event.model,
+          usage: event.usage || {},
+        },
+      });
+    });
+
+    api.registerHook("after_tool_call", async (event, ctx) => {
+      const rawResult = event.result ?? event.error ?? "";
+      const content =
+        typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult, null, 2);
+      await indexTextEntry({
+        namespace: resolveNamespace(ctx),
+        entryId: `${ctx.sessionId || ctx.runId || "tool"}:${event.toolCallId || event.toolName}:tool`,
+        sourceType: "ledger_entry",
+        sourceId: event.toolCallId || event.toolName,
+        content,
+        metadata: {
+          kind: "tool_result",
+          tool_name: event.toolName,
+          tool_call_id: event.toolCallId,
+          run_id: event.runId,
+          duration_ms: event.durationMs,
+          error: event.error,
+        },
+      });
+    });
 
     api.registerTool(
       async (ctx) => {

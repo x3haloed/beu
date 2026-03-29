@@ -196,6 +196,27 @@ class BeuProcess:
             logger.warning(f"Status check failed: {response.get('error')}")
             return {"storage": "error"}
 
+    def index(
+        self,
+        entries: list,
+        namespace: str = DEFAULT_NAMESPACE,
+        embed: bool = False,
+    ) -> dict:
+        """Index ledger entries into BeU."""
+        payload = {
+            "namespace": namespace,
+            "embed": embed,
+            "entries": entries,
+        }
+
+        response = self.call("index", payload, namespace)
+
+        if response.get("ok"):
+            return response.get("data", {})
+        else:
+            logger.warning(f"Index failed: {response.get('error')}")
+            return {}
+
 
 def get_beu() -> BeuProcess:
     """Get or create the singleton BeU process instance."""
@@ -297,6 +318,43 @@ def beu_distill_handler(args: dict, **kw) -> str:
 # -------------------------------------------------------------------------------
 
 
+def _resolve_namespace(kwargs: dict) -> str:
+    return (
+        kwargs.get("session_key")
+        or kwargs.get("session_id")
+        or kwargs.get("task_id")
+        or DEFAULT_NAMESPACE
+    )
+
+
+def _index_entry(
+    *,
+    namespace: str,
+    entry_id: str,
+    source_type: str,
+    source_id: str,
+    content: str,
+    metadata: dict,
+) -> None:
+    beu = get_beu()
+    text = content.strip()
+    if not text:
+      return
+    beu.index(
+        [
+            {
+                "entry_id": entry_id,
+                "source_type": source_type,
+                "source_id": source_id,
+                "content": text[:2000],
+                "metadata": metadata,
+            }
+        ],
+        namespace=namespace,
+        embed=False,
+    )
+
+
 def pre_llm_call_hook(messages: list, **kwargs) -> Optional[str]:
     """Hook that runs before each LLM call.
 
@@ -304,6 +362,23 @@ def pre_llm_call_hook(messages: list, **kwargs) -> Optional[str]:
     context to be appended to the prompt.
     """
     beu = get_beu()
+    namespace = _resolve_namespace(kwargs)
+
+    user_message = kwargs.get("user_message", "")
+    if user_message:
+        _index_entry(
+            namespace=namespace,
+            entry_id=f"{kwargs.get('session_id', namespace)}:{kwargs.get('model', 'llm')}:user",
+            source_type="ledger_entry",
+            source_id=str(kwargs.get("session_id") or namespace),
+            content=str(user_message),
+            metadata={
+                "kind": "user_turn",
+                "session_id": kwargs.get("session_id"),
+                "model": kwargs.get("model"),
+                "platform": kwargs.get("platform"),
+            },
+        )
 
     try:
         identity = beu.identity(query="all")
@@ -334,12 +409,40 @@ def post_llm_call_hook(response: str, messages: list, **kwargs) -> Optional[dict
     Could trigger distillation if configured. For now, this is a
     no-op since distillation requires explicit triggering.
     """
-    # In a full implementation, this would:
-    # 1. Track turn completion
-    # 2. Trigger distillation on context flush
-    # 3. Store results
-    pass
+    namespace = _resolve_namespace(kwargs)
+    assistant_response = kwargs.get("assistant_response") or response
+    if assistant_response:
+        _index_entry(
+            namespace=namespace,
+            entry_id=f"{kwargs.get('session_id', namespace)}:{kwargs.get('model', 'llm')}:assistant",
+            source_type="ledger_entry",
+            source_id=str(kwargs.get("session_id") or namespace),
+            content=str(assistant_response),
+            metadata={
+                "kind": "agent_turn",
+                "session_id": kwargs.get("session_id"),
+                "model": kwargs.get("model"),
+                "platform": kwargs.get("platform"),
+            },
+        )
     return None
+
+
+def post_tool_call_hook(tool_name: str, args: dict, result: Any, task_id: str, **kwargs) -> None:
+    namespace = _resolve_namespace(kwargs)
+    _index_entry(
+        namespace=namespace,
+        entry_id=f"{task_id}:{tool_name}:tool",
+        source_type="ledger_entry",
+        source_id=str(kwargs.get("tool_call_id") or tool_name),
+        content=result if isinstance(result, str) else json.dumps(result, ensure_ascii=False),
+        metadata={
+            "kind": "tool_result",
+            "tool_name": tool_name,
+            "task_id": task_id,
+            "tool_call_id": kwargs.get("tool_call_id"),
+        },
+    )
 
 
 def on_session_start_hook(**kwargs) -> None:
@@ -450,6 +553,7 @@ def register(ctx) -> None:
     # Register lifecycle hooks
     ctx.register_hook("pre_llm_call", pre_llm_call_hook)
     ctx.register_hook("post_llm_call", post_llm_call_hook)
+    ctx.register_hook("post_tool_call", post_tool_call_hook)
     ctx.register_hook("on_session_start", on_session_start_hook)
     ctx.register_hook("on_session_end", on_session_end_hook)
 

@@ -309,17 +309,116 @@ def _resolve_namespace(kwargs: dict) -> str:
     )
 
 
+BEU_CONFIG_ENV = "BEU_CONFIG_PATH"
+BEU_EMBEDDING_ENV_KEYS = {
+    "provider": "BEU_EMBEDDINGS_PROVIDER",
+    "base_url": "BEU_EMBEDDINGS_BASE_URL",
+    "api_key": "BEU_EMBEDDINGS_API_KEY",
+    "model": "BEU_EMBEDDINGS_MODEL",
+}
+BEU_DEFAULT_CONFIG_FILENAMES = ("beu.yaml", "beu.yml")
+
+
+def _load_beu_config_file() -> dict:
+    """Load BeU-local configuration from disk.
+
+    Priority:
+    1. BEU_CONFIG_PATH
+    2. beu.yaml next to this adapter
+    3. beu.yml next to this adapter
+    """
+    candidate_paths = []
+    env_path = os.environ.get(BEU_CONFIG_ENV, "").strip()
+    if env_path:
+        candidate_paths.append(Path(env_path).expanduser())
+
+    adapter_dir = Path(__file__).resolve().parent
+    candidate_paths.extend(adapter_dir / name for name in BEU_DEFAULT_CONFIG_FILENAMES)
+
+    for path in candidate_paths:
+        if not path.is_file():
+            continue
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            logger.warning("Failed to read BeU config %s: %s", path, exc)
+            return {}
+        if isinstance(data, dict):
+            return data
+        logger.warning("BeU config %s must contain a mapping at the top level", path)
+        return {}
+
+    return {}
+
+
+def _collect_beu_embedding_settings() -> dict:
+    """Merge BeU-local embeddings config and env overrides."""
+    config = _load_beu_config_file()
+    embeddings_cfg = {}
+
+    if isinstance(config.get("embeddings"), dict):
+        embeddings_cfg.update(config["embeddings"])
+
+    # Convenience top-level keys for simple configs.
+    for key in ("provider", "base_url", "api_key", "model"):
+        value = config.get(key)
+        if value not in (None, "") and key not in embeddings_cfg:
+            embeddings_cfg[key] = value
+
+    for key, env_name in BEU_EMBEDDING_ENV_KEYS.items():
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            embeddings_cfg[key] = value
+
+    cleaned = {}
+    for key, value in embeddings_cfg.items():
+        text_value = str(value or "").strip()
+        if text_value:
+            cleaned[key] = text_value
+    return cleaned
+
+
 def _resolve_embedding_provider(*, namespace: str, kwargs: dict) -> Optional[dict]:
     """Resolve a provider/config block suitable for BeU embeddings.
 
-    Hermes does not have a dedicated embeddings config today, so we reuse the
-    active model/provider configuration and named custom providers when they
-    supply a usable OpenAI-compatible endpoint.
+    Order of precedence:
+    1. BeU-local embeddings config (beu.yaml or BEU_CONFIG_PATH)
+    2. Hermes runtime provider resolution
+
+    The BeU-local layer is intentionally separate so Hermes chat/provider
+    selection can differ from BeU's embedding provider. When we do fall back to
+    Hermes, we delegate to Hermes' runtime provider resolver so its special
+    provider handlers (for example Gemini vs. OpenAI-compatible routing) stay
+    intact.
     """
+    local_settings = _collect_beu_embedding_settings()
+    if local_settings:
+        provider = str(local_settings.get("provider") or "").strip().lower()
+        base_url = str(local_settings.get("base_url") or "").strip().rstrip("/")
+        api_key = str(local_settings.get("api_key") or "").strip()
+        model = str(local_settings.get("model") or "").strip()
+
+        if not provider and base_url:
+            provider = "custom"
+
+        if provider and model:
+            embedding_provider = {
+                "provider": provider,
+                "model": model,
+            }
+            if base_url:
+                embedding_provider["base_url"] = base_url
+            if api_key:
+                embedding_provider["api_key"] = api_key
+            return embedding_provider
+
+        if any(local_settings.values()):
+            logger.warning(
+                "BeU embeddings config is present but incomplete; falling back to Hermes provider resolution"
+            )
+
     try:
-        from hermes_cli.config import load_config
         from hermes_cli.runtime_provider import (
-            _get_named_custom_provider,
             resolve_requested_provider,
             resolve_runtime_provider,
         )
@@ -327,48 +426,21 @@ def _resolve_embedding_provider(*, namespace: str, kwargs: dict) -> Optional[dic
         logger.warning(f"Embedding provider resolution unavailable: {exc}")
         return None
 
-    config = load_config()
-    model_cfg = config.get("model") if isinstance(config.get("model"), dict) else {}
     requested = kwargs.get("provider") or resolve_requested_provider()
-    named_custom = _get_named_custom_provider(requested) if isinstance(requested, str) else None
-    runtime = None
 
-    # Prefer explicit direct endpoint overrides from the model config.
-    base_url = str(model_cfg.get("base_url") or "").strip()
-    api_key = str(model_cfg.get("api_key") or model_cfg.get("api") or "").strip()
-    provider = str(model_cfg.get("provider") or "").strip().lower()
-    model = str(model_cfg.get("default") or model_cfg.get("model") or "").strip()
-
-    if named_custom and named_custom.get("base_url"):
-        runtime = {
-            "provider": "custom",
-            "base_url": str(named_custom.get("base_url") or "").strip().rstrip("/"),
-            "api_key": str(named_custom.get("api_key") or "").strip(),
-            "model": str(named_custom.get("model") or "").strip() or model,
-        }
-    elif base_url:
-        runtime = {
-            "provider": provider or "custom",
-            "base_url": base_url.rstrip("/"),
-            "api_key": api_key,
-            "model": model,
-        }
-    else:
-        try:
-            runtime = resolve_runtime_provider(requested=requested)
-        except Exception as exc:
-            logger.debug(f"Failed to resolve Hermes runtime provider for embeddings: {exc}")
-            runtime = None
+    try:
+        runtime = resolve_runtime_provider(requested=requested)
+    except Exception as exc:
+        logger.debug(f"Failed to resolve Hermes runtime provider for embeddings: {exc}")
+        runtime = None
 
     if not runtime:
         return None
 
     resolved_provider = str(runtime.get("provider") or "").strip().lower()
     resolved_base_url = str(runtime.get("base_url") or "").strip()
-    resolved_api_key = str(runtime.get("api_key") or "").strip()
-    resolved_model = model or str(runtime.get("model") or "").strip()
-    if named_custom and not resolved_model:
-        resolved_model = str(named_custom.get("model") or "").strip()
+    resolved_api_key = str(runtime.get("api_key") or runtime.get("api") or "").strip()
+    resolved_model = str(runtime.get("model") or "").strip()
 
     if resolved_provider not in SUPPORTED_EMBEDDING_PROVIDERS and not resolved_base_url:
         return None

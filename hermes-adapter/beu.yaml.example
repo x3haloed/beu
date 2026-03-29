@@ -1,0 +1,14 @@
+# BeU local embeddings config
+# Copy this file to beu.yaml and fill in the values you want BeU to use for embeddings.
+# Hermes chat/provider selection can remain separate.
+
+embeddings:
+  # Provider can be a special handler name (for example: google, openai, mistral, openrouter, custom).
+  provider: google
+
+  # Embedding model name for the selected provider.
+  model: text-embedding-004
+
+  # Optional for OpenAI-compatible/custom endpoints.
+  base_url: https://example.com/v1
+  api_key: ""

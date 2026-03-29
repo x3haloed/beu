@@ -12,6 +12,7 @@ export interface BeuIndexEntry {
   source_type: string;
   source_id: string;
   content: string;
+  embedding?: number[];
   metadata?: Record<string, unknown>;
 }
 
@@ -19,7 +20,6 @@ export interface LedgerEntry {
   entry_id: string;
   thread_id: string;
   turn_id: string;
-  kind: string;
   created_at: string;
   citation: string;
   content: string;
@@ -127,13 +127,11 @@ export class BeuProcess {
 
   ledgerList(options: {
     thread_id?: string;
-    kind?: string;
     limit?: number;
   }): Promise<any> {
     return this.call("ledger_list", {
       namespace: this.namespace,
       thread_id: options.thread_id,
-      kind: options.kind,
       limit: options.limit ?? 20,
     });
   }
@@ -141,14 +139,12 @@ export class BeuProcess {
   ledgerSearch(options: {
     query: string;
     thread_id?: string;
-    kind?: string;
     limit?: number;
   }): Promise<any> {
     return this.call("ledger_search", {
       namespace: this.namespace,
       query: options.query,
       thread_id: options.thread_id,
-      kind: options.kind,
       limit: options.limit ?? 8,
     });
   }

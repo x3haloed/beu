@@ -2,6 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "../../openclaw/src/config/config.js";
 import {
   type MemoryFlushPlan,
+  type MemoryEmbeddingProbeResult,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSection,
   registerMemoryRuntime,
@@ -9,8 +10,13 @@ import {
   type MemoryPromptSectionBuilder,
   type RegisteredMemorySearchManager,
   type MemoryProviderStatus,
-  type MemoryEmbeddingProbeResult,
 } from "../../openclaw/src/plugins/memory-state.js";
+import { getActivePluginRegistry } from "../../openclaw/src/plugins/runtime.js";
+import {
+  listRegisteredMemoryEmbeddingProviders,
+  type RegisteredMemoryEmbeddingProvider,
+} from "../../openclaw/src/plugins/memory-embedding-providers.js";
+import { resolveMemorySearchConfig } from "../../openclaw/packages/memory-host-sdk/src/runtime-core.js";
 import { createBeuProcess, type BeuProcess } from "./beu-process.js";
 import { buildBeuFlushPlan } from "./flush-plan.js";
 import { buildBeuPromptSection } from "./prompt-section.js";
@@ -38,6 +44,7 @@ async function indexTextEntry(params: {
   sourceId: string;
   content: string;
   metadata: Record<string, unknown>;
+  embedding?: number[];
 }) {
   const text = params.content.trim();
   if (!text) {
@@ -51,6 +58,7 @@ async function indexTextEntry(params: {
         source_type: params.sourceType,
         source_id: params.sourceId,
         content: truncateText(text),
+        embedding: params.embedding,
         metadata: {
           ...params.metadata,
           thread_id: params.threadId,
@@ -59,6 +67,109 @@ async function indexTextEntry(params: {
     ],
     { namespace: params.namespace, embed: false },
   );
+}
+
+type EmbeddingCandidate = {
+  pluginId: string;
+  provider: RegisteredMemoryEmbeddingProvider;
+};
+
+function resolvePreferredMemoryPluginId(cfg: OpenClawConfig): string | undefined {
+  const slot = cfg.plugins?.slots?.memory?.trim();
+  if (!slot || slot === "none") {
+    return undefined;
+  }
+  return slot;
+}
+
+function listMemoryPluginIds(params: { cfg: OpenClawConfig; agentId: string }): string[] {
+  const registry = getActivePluginRegistry();
+  const ordered = new Set<string>();
+  const add = (value?: string | null) => {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      ordered.add(trimmed);
+    }
+  };
+  add(resolvePreferredMemoryPluginId(params.cfg));
+  for (const record of registry?.plugins ?? []) {
+    if (record.kind === "memory" && record.status === "loaded") {
+      add(record.id);
+    }
+  }
+  return Array.from(ordered);
+}
+
+function findEmbeddingCandidates(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): EmbeddingCandidate[] {
+  const pluginIds = listMemoryPluginIds(params);
+  const providers = listRegisteredMemoryEmbeddingProviders();
+  const candidates: EmbeddingCandidate[] = [];
+  for (const pluginId of pluginIds) {
+    for (const provider of providers) {
+      if (provider.ownerPluginId === pluginId) {
+        candidates.push({ pluginId, provider });
+      }
+    }
+  }
+  if (candidates.length > 0) {
+    return candidates;
+  }
+  return providers.map((provider) => ({
+    pluginId: provider.ownerPluginId ?? "unknown",
+    provider,
+  }));
+}
+
+async function embedWithBestAvailableProvider(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  text: string;
+}): Promise<{ embedding?: number[]; providerId?: string; pluginId?: string }> {
+  const memorySearch = resolveMemorySearchConfig(params.cfg, params.agentId);
+  const candidates = findEmbeddingCandidates(params);
+
+  for (const candidate of candidates) {
+    try {
+      const created = await candidate.provider.adapter.create({
+        config: params.cfg,
+        model: memorySearch?.model || "",
+        remote: memorySearch?.remote
+          ? {
+              baseUrl: memorySearch.remote.baseUrl,
+              apiKey: memorySearch.remote.apiKey,
+              headers: memorySearch.remote.headers,
+            }
+          : undefined,
+        local: memorySearch?.local
+          ? {
+              modelPath: memorySearch.local.modelPath,
+              modelCacheDir: memorySearch.local.modelCacheDir,
+            }
+          : undefined,
+        outputDimensionality: memorySearch?.outputDimensionality,
+      });
+      if (!created.provider) {
+        continue;
+      }
+      return {
+        embedding: await created.provider.embedQuery(params.text),
+        providerId: candidate.provider.adapter.id,
+        pluginId: candidate.pluginId,
+      };
+    } catch (error) {
+      console.error("BeU embedding candidate failed", {
+        agentId: params.agentId,
+        pluginId: candidate.pluginId,
+        providerId: candidate.provider.adapter.id,
+        error,
+      });
+    }
+  }
+
+  return {};
 }
 
 function buildBeuRuntime(): MemoryPluginRuntime {
@@ -177,40 +288,58 @@ export default definePluginEntry({
     api.registerMemoryRuntime(buildBeuRuntime());
 
     api.registerHook("llm_input", async (event, ctx) => {
+      const text = typeof event.prompt === "string" ? event.prompt : "";
+      const embedding = text.trim()
+        ? await embedWithBestAvailableProvider({
+            cfg: ctx.config || ctx.runtimeConfig || ({} as OpenClawConfig),
+            agentId: ctx.agentId || event.sessionId || "default",
+            text,
+          })
+        : {};
       await indexTextEntry({
         namespace: resolveNamespace(ctx),
         threadId: String(event.sessionId || event.runId || ctx.sessionKey || "default"),
         entryId: `${event.sessionId}:${event.runId || "llm_input"}:user`,
-        sourceType: "ledger_entry",
+        sourceType: "user_turn",
         sourceId: event.runId || event.sessionId,
-        content: typeof event.prompt === "string" ? event.prompt : "",
+        content: text,
         metadata: {
-          kind: "user_turn",
           session_id: event.sessionId,
           run_id: event.runId,
           provider: event.provider,
           model: event.model,
           images_count: event.imagesCount,
         },
+        embedding: embedding.embedding,
       });
     });
 
     api.registerHook("llm_output", async (event, ctx) => {
+      const content = (event.assistantTexts || []).join("\n\n");
+      const embedding = content.trim()
+        ? await embedWithBestAvailableProvider({
+            cfg: ctx.config || ctx.runtimeConfig || ({} as OpenClawConfig),
+            agentId: ctx.agentId || event.sessionId || "default",
+            text: content,
+          })
+        : {};
       await indexTextEntry({
         namespace: resolveNamespace(ctx),
         threadId: String(event.sessionId || event.runId || ctx.sessionKey || "default"),
         entryId: `${event.sessionId}:${event.runId || "llm_output"}:assistant`,
-        sourceType: "ledger_entry",
+        sourceType: "assistant_turn",
         sourceId: event.runId || event.sessionId,
-        content: (event.assistantTexts || []).join("\n\n"),
+        content,
         metadata: {
-          kind: "agent_turn",
           session_id: event.sessionId,
           run_id: event.runId,
           provider: event.provider,
           model: event.model,
           usage: event.usage || {},
+          embedding_provider_id: embedding.providerId,
+          embedding_plugin_id: embedding.pluginId,
         },
+        embedding: embedding.embedding,
       });
     });
 
@@ -218,21 +347,30 @@ export default definePluginEntry({
       const rawResult = event.result ?? event.error ?? "";
       const content =
         typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult, null, 2);
+      const embedding = content.trim()
+        ? await embedWithBestAvailableProvider({
+            cfg: ctx.config || ctx.runtimeConfig || ({} as OpenClawConfig),
+            agentId: ctx.agentId || ctx.sessionId || "default",
+            text: content,
+          })
+        : {};
       await indexTextEntry({
         namespace: resolveNamespace(ctx),
         threadId: String(ctx.sessionId || ctx.runId || ctx.sessionKey || "default"),
         entryId: `${ctx.sessionId || ctx.runId || "tool"}:${event.toolCallId || event.toolName}:tool`,
-        sourceType: "ledger_entry",
+        sourceType: "tool_result",
         sourceId: event.toolCallId || event.toolName,
         content,
         metadata: {
-          kind: "tool_result",
           tool_name: event.toolName,
           tool_call_id: event.toolCallId,
           run_id: event.runId,
           duration_ms: event.durationMs,
           error: event.error,
+          embedding_provider_id: embedding.providerId,
+          embedding_plugin_id: embedding.pluginId,
         },
+        embedding: embedding.embedding,
       });
     });
 
@@ -247,17 +385,12 @@ export default definePluginEntry({
             type: "object" as const,
             properties: {
               thread_id: { type: "string" },
-              kind: { type: "string" },
               limit: { type: "number", minimum: 1, default: 20 },
             },
           },
-          handler: async (
-            params: { thread_id?: string; kind?: string; limit?: number },
-            ctx,
-          ) => {
+          handler: async (params: { thread_id?: string; limit?: number }, ctx) => {
             const result = await beu.ledgerList({
               thread_id: params.thread_id,
-              kind: params.kind,
               limit: params.limit,
             });
             return {
@@ -281,19 +414,14 @@ export default definePluginEntry({
             properties: {
               query: { type: "string" },
               thread_id: { type: "string" },
-              kind: { type: "string" },
               limit: { type: "number", minimum: 1, default: 8 },
             },
             required: ["query"],
           },
-          handler: async (
-            params: { query: string; thread_id?: string; kind?: string; limit?: number },
-            ctx,
-          ) => {
+          handler: async (params: { query: string; thread_id?: string; limit?: number }, ctx) => {
             const result = await beu.ledgerSearch({
               query: params.query,
               thread_id: params.thread_id,
-              kind: params.kind,
               limit: params.limit,
             });
             return {

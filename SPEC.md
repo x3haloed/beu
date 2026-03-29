@@ -2,11 +2,11 @@
 
 Version: 1.0.0
 
-All communication is JSON over STDIO. The host sends a request, BeU responds, process exits.
+All communication is JSON over STDIO. The host sends a request, BeU responds, and the process stays alive until stdin closes.
 
 ## Transport
 
-- **Input**: Read JSON from stdin until EOF
+- **Input**: Read newline-delimited JSON from stdin until EOF
 - **Output**: Write JSON to stdout
 - **Errors**: Write to stderr, non-zero exit code
 
@@ -15,7 +15,7 @@ All communication is JSON over STDIO. The host sends a request, BeU responds, pr
 ```json
 {
   "version": "1.0.0",
-  "command": "distill|recall|rebuild|identity|index|status",
+  "command": "distill|recall|rebuild|identity|index|status|wait_hold|wait_release",
   "id": "uuid",
   "namespace": "agent-123",       // Agent/namespace identifier
   "payload": { ... }
@@ -42,6 +42,62 @@ Note: `namespace` maps to the agent ID in OpenClaw or just "default" in Hermes, 
   "ok": false,
   "error": "error message",
   "code": "ERROR_CODE"
+}
+```
+
+---
+
+## Command: `wait_hold`
+
+Hold a request open until a matching `wait_release` arrives.
+
+### Request
+
+```json
+{
+  "version": "1.0.0",
+  "command": "wait_hold",
+  "id": "req-hold",
+  "payload": {
+    "token": "release-me"
+  }
+}
+```
+
+### Response
+
+The response is delayed until a matching `wait_release` command arrives for the same token.
+
+---
+
+## Command: `wait_release`
+
+Release a blocked `wait_hold` request.
+
+### Request
+
+```json
+{
+  "version": "1.0.0",
+  "command": "wait_release",
+  "id": "req-release",
+  "payload": {
+    "token": "release-me"
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "version": "1.0.0",
+  "id": "req-release",
+  "ok": true,
+  "data": {
+    "message": "wait released",
+    "token": "release-me"
+  }
 }
 ```
 

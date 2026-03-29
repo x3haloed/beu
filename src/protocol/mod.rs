@@ -3,12 +3,15 @@ use crate::types::{Command, ErrorCode, Request, Response};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::io::{BufRead, Write};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::{debug, error, info};
-use std::thread::sleep;
-use std::time::Duration;
+use tokio::sync::Notify;
 
 pub struct Protocol;
+
+static WAIT_REGISTRY: OnceLock<Mutex<HashMap<String, Arc<Notify>>>> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 struct RecallPayload {
@@ -82,6 +85,11 @@ struct DistillPayload {
     wake_pack: Option<Value>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WaitPayload {
+    token: String,
+}
+
 fn default_limit() -> usize {
     5
 }
@@ -98,52 +106,87 @@ impl Protocol {
     async fn run_async() -> Result<()> {
         let stdin = std::io::stdin();
         let mut stdout = std::io::stdout();
-
-        let mut buffer = String::new();
-        let mut handle = stdin.lock();
-
-        match handle.read_line(&mut buffer) {
-            Ok(0) => {
-                info!("No input received, exiting");
-                return Ok(());
+        let db = Arc::new(Db::open_default().await.context("failed to open database")?);
+        let (request_tx, mut request_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (response_tx, mut response_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let writer = tokio::task::spawn_blocking(move || {
+            while let Some(output) = response_rx.blocking_recv() {
+                if let Err(e) = stdout.write_all(output.as_bytes()) {
+                    error!(error = %e, "Failed to write response");
+                    break;
+                }
+                if let Err(e) = stdout.write_all(b"\n") {
+                    error!(error = %e, "Failed to write newline");
+                    break;
+                }
+                if let Err(e) = stdout.flush() {
+                    error!(error = %e, "Failed to flush output");
+                    break;
+                }
             }
-            Ok(_) => {}
-            Err(e) => {
-                error!(error = %e, "Failed to read from stdin");
-                eprintln!("Error reading stdin: {}", e);
-                std::process::exit(1);
+        });
+
+        let reader_tx = request_tx.clone();
+        let reader = std::thread::spawn(move || {
+            let mut handle = stdin.lock();
+            let mut buffer = String::new();
+            loop {
+                buffer.clear();
+                match handle.read_line(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let trimmed = buffer.trim();
+                        if !trimmed.is_empty() {
+                            let _ = reader_tx.send(trimmed.to_string());
+                        }
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to read from stdin");
+                        break;
+                    }
+                }
             }
+        });
+        drop(request_tx);
+
+        let mut tasks = Vec::new();
+
+        while let Some(request_text) = request_rx.recv().await {
+            debug!(input = %request_text, "Received request");
+
+            let response_tx = response_tx.clone();
+            let db = db.clone();
+            tasks.push(tokio::spawn(async move {
+                let response = match serde_json::from_str::<Request>(&request_text) {
+                    Ok(request) => Self::handle_request(request, &db).await,
+                    Err(e) => {
+                        error!(error = %e, "Failed to parse request");
+                        Response::err(
+                            String::new(),
+                            format!("Invalid JSON: {}", e),
+                            ErrorCode::INVALID_REQUEST,
+                        )
+                    }
+                };
+
+                match serde_json::to_string(&response) {
+                    Ok(output) => {
+                        let _ = response_tx.send(output);
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to serialize response");
+                    }
+                }
+            }));
         }
 
-        debug!(input = %buffer, "Received request");
-
-        let request: Request = match serde_json::from_str(&buffer) {
-            Ok(req) => req,
-            Err(e) => {
-                error!(error = %e, "Failed to parse request");
-                let response = Response::err(
-                    String::new(),
-                    format!("Invalid JSON: {}", e),
-                    ErrorCode::INVALID_REQUEST,
-                );
-                let _ = serde_json::to_writer(&mut stdout, &response);
-                let _ = stdout.flush();
-                return Ok(());
-            }
-        };
-
-        let db = Self::open_db_with_retry().await?;
-        let response = Self::handle_request(request, &db).await;
-
-        let output = serde_json::to_string(&response)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize response: {}", e))?;
-
-        stdout
-            .write_all(output.as_bytes())
-            .context("Failed to write response")?;
-        stdout.flush().context("Failed to flush output")?;
-
-        debug!(response = %output, "Sent response");
+        info!("stdin closed, exiting");
+        drop(response_tx);
+        for task in tasks {
+            let _ = task.await;
+        }
+        let _ = reader.join();
+        let _ = writer.await;
         Ok(())
     }
 
@@ -182,6 +225,10 @@ impl Protocol {
             Command::LedgerGet => {
                 Self::handle_ledger_get(request.id, namespace, request.payload, db).await
             }
+            Command::WaitHold => Self::handle_wait_hold(request.id, namespace, request.payload).await,
+            Command::WaitRelease => {
+                Self::handle_wait_release(request.id, namespace, request.payload).await
+            }
             Command::Rebuild => Self::handle_rebuild(request.id, namespace, request.payload).await,
             Command::Identity => {
                 Self::handle_identity(request.id, namespace, request.payload).await
@@ -191,23 +238,6 @@ impl Protocol {
                 Self::handle_status(request.id, namespace, request.payload, db).await
             }
         }
-    }
-
-    async fn open_db_with_retry() -> Result<Db> {
-        let mut last_error = None;
-        for attempt in 0..5 {
-            match Db::open_default().await {
-                Ok(db) => return Ok(db),
-                Err(e) => {
-                    last_error = Some(e);
-                    if attempt < 4 {
-                        sleep(Duration::from_millis(50 * (attempt + 1) as u64));
-                    }
-                }
-            }
-        }
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("failed to open database")))
-            .context("failed to open database")
     }
 
     async fn handle_distill(id: String, namespace: String, payload: Value, db: &Db) -> Response {
@@ -601,6 +631,72 @@ impl Protocol {
                 "namespace": namespace
             }),
         )
+    }
+
+    async fn handle_wait_hold(id: String, namespace: String, payload: Value) -> Response {
+        let parsed: WaitPayload = match serde_json::from_value(payload) {
+            Ok(value) => value,
+            Err(e) => {
+                return Response::err(
+                    id,
+                    format!("Invalid wait_hold payload: {}", e),
+                    ErrorCode::INVALID_REQUEST,
+                );
+            }
+        };
+        let notify = {
+            let registry = WAIT_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+            let mut guard = registry.lock().expect("wait registry lock");
+            guard
+                .entry(parsed.token.clone())
+                .or_insert_with(|| Arc::new(Notify::new()))
+                .clone()
+        };
+        notify.notified().await;
+        Response::ok(
+            id,
+            serde_json::json!({
+                "message": "wait released",
+                "token": parsed.token,
+                "namespace": namespace
+            }),
+        )
+    }
+
+    async fn handle_wait_release(id: String, namespace: String, payload: Value) -> Response {
+        let parsed: WaitPayload = match serde_json::from_value(payload) {
+            Ok(value) => value,
+            Err(e) => {
+                return Response::err(
+                    id,
+                    format!("Invalid wait_release payload: {}", e),
+                    ErrorCode::INVALID_REQUEST,
+                );
+            }
+        };
+        let notify = {
+            let registry = WAIT_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+            let mut guard = registry.lock().expect("wait registry lock");
+            guard.remove(&parsed.token)
+        };
+        match notify {
+            Some(notify) => {
+                notify.notify_waiters();
+                Response::ok(
+                    id,
+                    serde_json::json!({
+                        "message": "wait released",
+                        "token": parsed.token,
+                        "namespace": namespace
+                    }),
+                )
+            }
+            None => Response::err(
+                id,
+                format!("wait token not found: {}", parsed.token),
+                ErrorCode::NOT_FOUND,
+            ),
+        }
     }
 }
 

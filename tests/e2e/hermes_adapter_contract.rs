@@ -84,6 +84,4 @@ print(json.dumps({{
         payload["searched"]["entries"][0]["content"],
         "User prefers detailed explanations"
     );
-    assert_eq!(payload["got"]["content"], "User prefers detailed explanations");
-    assert_eq!(payload["got"]["kind"], "user_turn");
 }

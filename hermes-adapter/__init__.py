@@ -446,7 +446,7 @@ def pre_llm_call_hook(messages: list, **kwargs) -> Optional[str]:
             namespace=namespace,
             thread_id=str(kwargs.get("session_id") or namespace),
             entry_id=f"{kwargs.get('session_id', namespace)}:{kwargs.get('model', 'llm')}:user",
-            source_type="ledger_entry",
+            source_type="user_turn",
             source_id=str(kwargs.get("session_id") or namespace),
             content=str(user_message),
             metadata={
@@ -479,7 +479,7 @@ def post_llm_call_hook(response: str, messages: list, **kwargs) -> Optional[dict
             namespace=namespace,
             thread_id=str(kwargs.get("session_id") or namespace),
             entry_id=f"{kwargs.get('session_id', namespace)}:{kwargs.get('model', 'llm')}:assistant",
-            source_type="ledger_entry",
+            source_type="assistant_turn",
             source_id=str(kwargs.get("session_id") or namespace),
             content=str(assistant_response),
             metadata={
@@ -499,7 +499,7 @@ def post_tool_call_hook(tool_name: str, args: dict, result: Any, task_id: str, *
         namespace=namespace,
         thread_id=str(kwargs.get("session_id") or task_id or namespace),
         entry_id=f"{task_id}:{tool_name}:tool",
-        source_type="ledger_entry",
+        source_type="tool_result",
         source_id=str(kwargs.get("tool_call_id") or tool_name),
         content=result if isinstance(result, str) else json.dumps(result, ensure_ascii=False),
         metadata={

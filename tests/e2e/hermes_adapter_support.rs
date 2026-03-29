@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+use std::time::UNIX_EPOCH;
 
 pub struct HermesInstall {
     pub hermes_repo: PathBuf,
@@ -65,16 +66,43 @@ fn hermes_install() -> &'static HermesInstall {
         let hermes_repo = hermes_agent_repo_root().expect(
             "set BEU_HERMES_AGENT_REPO or keep a hermes-agent checkout adjacent to the beu repo",
         );
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let venv_dir = temp_dir.path().join("venv");
+        let cache_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("e2e-cache")
+            .join("hermes");
+        fs::create_dir_all(&cache_root).expect("create cache root");
+        let cache_key = hermes_cache_key(&hermes_repo);
+        let install_dir = cache_root.join(cache_key);
+        let venv_dir = install_dir.join("venv");
+        let marker = install_dir.join(".ready");
 
-        let venv_status = Command::new("python3")
-            .arg("-m")
-            .arg("venv")
-            .arg(&venv_dir)
-            .status()
-            .expect("create venv");
-        assert!(venv_status.success(), "failed to create isolated venv");
+        if !marker.exists() {
+            fs::create_dir_all(&install_dir).expect("create install dir");
+            if venv_dir.exists() {
+                fs::remove_dir_all(&venv_dir).expect("clear stale venv");
+            }
+            let venv_status = Command::new("python3")
+                .arg("-m")
+                .arg("venv")
+                .arg(&venv_dir)
+                .status()
+                .expect("create venv");
+            assert!(venv_status.success(), "failed to create isolated venv");
+
+            let venv_python = venv_dir.join("bin").join("python");
+            let pip_status = Command::new(&venv_python)
+                .arg("-m")
+                .arg("pip")
+                .arg("install")
+                .arg("-e")
+                .arg(".[all]")
+                .current_dir(&hermes_repo)
+                .status()
+                .expect("install isolated deps");
+            assert!(pip_status.success(), "failed to install isolated deps");
+
+            fs::write(&marker, b"ok").expect("write cache marker");
+        }
 
         let cargo_status = Command::new("cargo")
             .arg("build")
@@ -86,18 +114,9 @@ fn hermes_install() -> &'static HermesInstall {
         assert!(cargo_status.success(), "failed to build beu binary");
 
         let venv_python = venv_dir.join("bin").join("python");
-        let pip_status = Command::new(&venv_python)
-            .arg("-m")
-            .arg("pip")
-            .arg("install")
-            .arg("-e")
-            .arg(".[all]")
-            .current_dir(&hermes_repo)
-            .status()
-            .expect("install isolated deps");
-        assert!(pip_status.success(), "failed to install isolated deps");
 
         let beu_binary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/beu");
+        let temp_dir = tempfile::tempdir().expect("tempdir");
 
         Box::leak(Box::new(HermesInstall {
             hermes_repo,
@@ -106,6 +125,33 @@ fn hermes_install() -> &'static HermesInstall {
             _temp_dir: temp_dir,
         }))
     })
+}
+
+fn hermes_cache_key(hermes_repo: &Path) -> String {
+    let mut parts = vec![sanitize_cache_component(&hermes_repo.display().to_string())];
+    for rel in ["pyproject.toml", "uv.lock", "requirements.txt"] {
+        let stamp = file_stamp(&hermes_repo.join(rel));
+        parts.push(format!("{}-{}", rel.replace('.', "_"), stamp));
+    }
+    parts.join("-")
+}
+
+fn file_stamp(path: &Path) -> u64 {
+    let meta = fs::metadata(path).ok();
+    meta.and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
+}
+
+fn sanitize_cache_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' => ch,
+            _ => '_',
+        })
+        .collect()
 }
 
 fn hermes_agent_repo_root() -> Option<PathBuf> {

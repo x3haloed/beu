@@ -42,3 +42,7 @@ path = "tests/e2e/hermes_adapter_contract.rs"
 [[test]]
 name = "openclaw_adapter"
 path = "tests/e2e/openclaw_adapter.rs"
+
+[[test]]
+name = "protocol_vector_search"
+path = "tests/protocol_vector_search.rs"

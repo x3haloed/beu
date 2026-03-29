@@ -51,12 +51,14 @@ pub async fn run(db: &Db) -> anyhow::Result<()> {
             created_at TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS memory_items (
+        CREATE TABLE IF NOT EXISTS ledger_entries (
             id TEXT PRIMARY KEY,
             namespace_id TEXT NOT NULL,
-            item_type TEXT NOT NULL,
+            entry_type TEXT NOT NULL,
             source_type TEXT NOT NULL,
             source_id TEXT NOT NULL,
+            thread_id TEXT,
+            turn_id TEXT,
             title TEXT,
             summary TEXT,
             citation TEXT,
@@ -67,35 +69,55 @@ pub async fn run(db: &Db) -> anyhow::Result<()> {
             deleted_at TEXT
         );
 
-        CREATE INDEX IF NOT EXISTS idx_memory_items_namespace_type
-            ON memory_items(namespace_id, item_type);
+        CREATE INDEX IF NOT EXISTS idx_ledger_entries_namespace_type
+            ON ledger_entries(namespace_id, entry_type);
 
-        CREATE INDEX IF NOT EXISTS idx_memory_items_namespace_source
-            ON memory_items(namespace_id, source_type, source_id);
+        CREATE INDEX IF NOT EXISTS idx_ledger_entries_namespace_source
+            ON ledger_entries(namespace_id, source_type, source_id);
 
-        CREATE INDEX IF NOT EXISTS idx_memory_items_namespace_updated
-            ON memory_items(namespace_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_ledger_entries_namespace_updated
+            ON ledger_entries(namespace_id, updated_at DESC);
 
-        CREATE TABLE IF NOT EXISTS memory_item_text (
-            item_id TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS ledger_entry_chunks (
+            chunk_id TEXT PRIMARY KEY,
             namespace_id TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL DEFAULT 0,
             content TEXT NOT NULL,
             content_norm TEXT,
             search_hints_json TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            FOREIGN KEY(item_id) REFERENCES memory_items(id)
+            FOREIGN KEY(entry_id) REFERENCES ledger_entries(id)
         );
 
-        CREATE INDEX IF NOT EXISTS idx_memory_item_text_namespace
-            ON memory_item_text(namespace_id);
+        CREATE INDEX IF NOT EXISTS idx_ledger_entry_chunks_namespace
+            ON ledger_entry_chunks(namespace_id, entry_id, chunk_index);
 
-        CREATE VIRTUAL TABLE IF NOT EXISTS memory_item_fts USING fts5(
-            item_id UNINDEXED,
+        CREATE VIRTUAL TABLE IF NOT EXISTS ledger_entry_chunks_fts USING fts5(
+            chunk_id UNINDEXED,
             namespace_id UNINDEXED,
             content,
             tokenize = 'porter unicode61'
         );
+
+        CREATE TABLE IF NOT EXISTS ledger_entry_embeddings (
+            chunk_id TEXT PRIMARY KEY,
+            namespace_id TEXT NOT NULL,
+            embedding F32_BLOB(768) NOT NULL,
+            embedding_model TEXT,
+            embedding_provider TEXT,
+            embedding_dims INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(chunk_id) REFERENCES ledger_entry_chunks(chunk_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ledger_entry_embeddings_namespace
+            ON ledger_entry_embeddings(namespace_id);
+
+        CREATE INDEX IF NOT EXISTS idx_ledger_entry_embeddings_vector
+            ON ledger_entry_embeddings(libsql_vector_idx(embedding));
 
         CREATE INDEX IF NOT EXISTS idx_events_thread_sequence ON events(thread_id, sequence);
         CREATE INDEX IF NOT EXISTS idx_turns_thread ON turns(thread_id, created_at DESC);

@@ -60,7 +60,7 @@ The `MemorySearchManager` provides:
 - Must implement `embed(text) => number[]`
 
 **5. Tools**
-- `memory_search` - Search memory
+- `memory_search` - Search raw turn content
 - `memory_get` - Retrieve specific memories
 
 ### Hermes-agent (Python)
@@ -100,29 +100,29 @@ The system we're porting from betterclaw-legacy:
 │                      Runtime (Rust)                             │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐     │
-│  │    Turn      │───▶│   Distill    │───▶│    Store     │     │
-│  │   Ingest     │    │  (Compress)  │    │  (libsql)    │     │
-│  └──────────────┘    └──────────────┘    └──────────────┘     │
-│         │                   │                   │               │
-│         │                   │                   ▼               │
-│         │                   │          ┌──────────────┐         │
-│         │                   └─────────▶│   Recall     │         │
-│         │                             │   (Search)   │         │
-│         │                             └──────────────┘         │
-│         │                                      │                │
-│         ▼                                      ▼                │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                     Ledger                               │   │
-│  │  - user_turn    - agent_turn    - tool_call            │   │
-│  │  - tool_result - error         - trace_summary         │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                              │                                  │
-│                              ▼                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                 Embeddings (chunked)                    │   │
-│  │  - FTS index    - Vector index (hybrid)                │   │
-│  └──────────────────────────────────────────────────────────┘   │
+│  ┌──────────────┐    ┌──────────────────┐    ┌──────────────┐   │
+│  │    Turn      │───▶│  Canonical Ledger │──▶│    Store     │   │
+│  │   Ingest     │    │   + Search Units  │    │  (libsql)    │   │
+│  └──────────────┘    └──────────────────┘    └──────────────┘   │
+│         │                     │                   │              │
+│         │                     │                   ▼              │
+│         │                     │          ┌──────────────┐        │
+│         │                     └─────────▶│   Recall     │        │
+│         │                                │   (Search)   │        │
+│         │                                └──────────────┘        │
+│         │                                      │                 │
+│         ▼                                      ▼                 │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │                    Ledger Entries                         │    │
+│  │  - user_turn   - agent_turn   - tool_call               │    │
+│  │  - tool_result  - error       - trace_summary           │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │            Search Units (chunk-level)                     │    │
+│  │  - FTS index    - native vector column + index           │    │
+│  └──────────────────────────────────────────────────────────┘    │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -130,12 +130,9 @@ The system we're porting from betterclaw-legacy:
 **Key Components:**
 
 1. **Turn Ingest** - Normalize turns into ledger entries
-2. **Distill (Compressor)** - LLM-driven compression:
-   - Takes: thread history, active invariants, prior wake pack
-   - Produces: wake pack, facts, invariants, drift items
-3. **Store** - SQLite (libsql) for structured data
-4. **Recall** - Hybrid search (BM25 FTS + vectors)
-5. **Embeddings** - Chunked + stored per entry
+2. **Store** - SQLite (libsql) for structured data
+3. **Recall** - Hybrid search over chunked raw turn entries using FTS plus native vectors
+4. **Embeddings** - Stored alongside chunked raw-turn search units using libsql vector columns
 
 ---
 
@@ -215,7 +212,7 @@ The binary exposes these commands via STDIO:
 | Command | OpenClaw Use | Hermes Use | Description |
 |---------|--------------|------------|--------------|
 | `distill` | Flush plan triggers | post_llm_call hook | Compress turn to memory |
-| `recall` | memory_search tool | memory_search tool | Search memory |
+| `recall` | memory_search tool | memory_search tool | Search raw turn content |
 | `rebuild` | CLI / init | CLI / init | Full rebuild from history |
 | `identity` | Prompt section build | pre_llm_call hook | Get agent identity |
 | `index` | sync() called | (batch) | Index new content |
@@ -232,7 +229,7 @@ OpenClaw calls memory_search tool
 Adapter sends recall command to binary
     │
     ▼
-Binary queries storage, returns hits
+Binary queries raw-turn search units, returns hits
     │
     ▼
 Adapter formats as tool result, returns to OpenClaw
@@ -554,20 +551,18 @@ The binary's `compress/` module handles output parsing, not the LLM call itself.
 
 ## Embeddings
 
-### Strategy: FTS5 First
+### Strategy: FTS5 + Native Vectors for Raw Turns
 
-Per AGENTS.md principle: "vector search is better at semantic search than FTS5, but FTS5 must be made to work as well as possible *first* before exploring vector search"
-
-**Default: FTS5 hybrid search**
-- SQLite FTS5 for full-text search (BM25 ranking)
-- Keyword extraction and matching
-- No external dependencies
+**Default: raw-turn hybrid search**
+- SQLite FTS5 for full-text search over assistant/user/tool turn content (BM25 ranking)
+- Native libsql vector columns for semantic similarity
+- No external dependencies for storage/querying
 - Works offline, on-device
 
-**Where supported: Optional vector enhancement**
+**Where supported: vector enhancement**
 - If host (OpenClaw) has embedding system, adapter can optionally use it
 - Binary can accept pre-computed embeddings from adapter
-- Keeps binary simple but allows upgrade path
+- Search stays limited to raw turn content
 
 ### OpenClaw
 
@@ -584,4 +579,4 @@ No built-in embedding system. Use binary's FTS5-only approach.
 
 ### Implementation
 
-The binary's recall command will always work with FTS5. If embeddings are available (either from binary's own embedding module or passed in from adapter), vector scores are merged with BM25.
+The binary's recall command works over raw assistant/user/tool turn content with FTS5. If embeddings are available (either from binary's own embedding module or passed in from adapter), vector scores are merged with BM25.

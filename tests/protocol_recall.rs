@@ -14,10 +14,10 @@ async fn protocol_recall_searches_indexed_memory() {
         payload: serde_json::json!({
             "entries": [{
                 "entry_id": "entry-1",
-                "source_type": "ledger_entry",
+                "source_type": "user_turn",
                 "source_id": "turn-1",
                 "content": "User prefers verbose responses",
-                "metadata": { "kind": "invariant" }
+                "metadata": { "thread_id": "thread-1", "turn_id": "turn-1" }
             }]
         }),
     };
@@ -32,8 +32,7 @@ async fn protocol_recall_searches_indexed_memory() {
         namespace: Some("agent-123".to_string()),
         payload: serde_json::json!({
             "query": "verbose responses",
-            "limit": 5,
-            "sources": ["invariant"]
+            "limit": 5
         }),
     };
 
@@ -45,7 +44,7 @@ async fn protocol_recall_searches_indexed_memory() {
 
     let hits = data["hits"].as_array().unwrap();
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0]["source_type"], "invariant");
+    assert_eq!(hits[0]["source_type"], "user_turn");
     assert_eq!(hits[0]["source_id"], "turn-1");
 }
 
@@ -61,10 +60,10 @@ async fn protocol_recall_honors_namespace_and_source_filters() {
         payload: serde_json::json!({
             "entries": [{
                 "entry_id": "entry-default",
-                "source_type": "ledger_entry",
+                "source_type": "user_turn",
                 "source_id": "turn-default",
                 "content": "User prefers detailed explanations",
-                "metadata": { "kind": "invariant" }
+                "metadata": { "thread_id": "thread-default", "turn_id": "turn-default" }
             }]
         }),
     };
@@ -76,10 +75,10 @@ async fn protocol_recall_honors_namespace_and_source_filters() {
         payload: serde_json::json!({
             "entries": [{
                 "entry_id": "entry-agent",
-                "source_type": "ledger_entry",
+                "source_type": "assistant_turn",
                 "source_id": "turn-agent",
                 "content": "User prefers short answers",
-                "metadata": { "kind": "fact" }
+                "metadata": { "thread_id": "thread-agent", "turn_id": "turn-agent" }
             }]
         }),
     };
@@ -100,8 +99,7 @@ async fn protocol_recall_honors_namespace_and_source_filters() {
         namespace: Some("default".to_string()),
         payload: serde_json::json!({
             "query": "detailed explanations",
-            "limit": 5,
-            "sources": ["invariant"]
+            "limit": 5
         }),
     };
     let default_response = Protocol::handle_request(default_recall, &db).await;
@@ -111,7 +109,7 @@ async fn protocol_recall_honors_namespace_and_source_filters() {
     };
     let default_hits = default_data["hits"].as_array().unwrap();
     assert_eq!(default_hits.len(), 1);
-    assert_eq!(default_hits[0]["source_type"], "invariant");
+    assert_eq!(default_hits[0]["source_type"], "user_turn");
     assert_eq!(default_hits[0]["source_id"], "turn-default");
 
     let agent_recall = Request {
@@ -121,8 +119,7 @@ async fn protocol_recall_honors_namespace_and_source_filters() {
         namespace: Some("agent-123".to_string()),
         payload: serde_json::json!({
             "query": "short answers",
-            "limit": 5,
-            "sources": ["invariant"]
+            "limit": 5
         }),
     };
     let agent_response = Protocol::handle_request(agent_recall, &db).await;
@@ -131,5 +128,7 @@ async fn protocol_recall_honors_namespace_and_source_filters() {
         other => panic!("expected ok response for agent namespace, got {other:?}"),
     };
     let agent_hits = agent_data["hits"].as_array().unwrap();
-    assert!(agent_hits.is_empty());
+    assert_eq!(agent_hits.len(), 1);
+    assert_eq!(agent_hits[0]["source_type"], "assistant_turn");
+    assert_eq!(agent_hits[0]["source_id"], "turn-agent");
 }

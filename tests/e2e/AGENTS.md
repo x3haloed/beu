@@ -34,7 +34,7 @@ Keep shared constants and fixtures in one place. Import selectors, protocol cons
 
 - Use `httpx.AsyncClient` for direct HTTP calls when an adapter exposes HTTP.
 - Use `aiohttp` or the lightest available async client for SSE only when the scenario needs streaming.
-- Use the commands from `SPEC.md`: `distill`, `recall`, `rebuild`, `identity`, `index`, `status`, `wait_hold`, and `wait_release`.
+- Use the commands from `SPEC.md`: `distill`, `recall`, `rebuild`, `identity`, `index`, `status`, `wait_hold`, and `wait_release`. `recall` only searches raw assistant/user/tool turn content.
 - Use `wait_hold`/`wait_release` only for protocol lifecycle pressure tests that need to prove the process can accept additional work while one request is blocked.
 - For Rust e2e adapter tests, use isolated temp homes/venvs and real subprocess execution. Keep dependency installs contained to the test fixture.
 - For adapter coverage against Hermes or OpenClaw, discover the local host repo from `BEU_HERMES_AGENT_REPO` or `BEU_OPENCLAW_REPO` first, then fall back to nearby checkout discovery. Do not hard-code machine-specific paths.

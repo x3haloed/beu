@@ -200,7 +200,7 @@ Compress thread history into memory artifacts.
 
 ## Command: `recall`
 
-Search memory for relevant information.
+Search raw assistant/user/tool turn content.
 
 ### Request
 
@@ -212,8 +212,7 @@ Search memory for relevant information.
   "payload": {
     "namespace": "default",
     "query": "what does user prefer",
-    "limit": 5,
-    "sources": ["invariant", "fact", "wake_pack"]
+    "limit": 5
   }
 }
 ```
@@ -228,18 +227,11 @@ Search memory for relevant information.
   "data": {
     "hits": [
       {
-        "source_type": "invariant",
-        "source_id": "inv-1",
+        "source_type": "user_turn",
+        "source_id": "turn-1",
         "content": "User prefers verbose responses",
         "score": 0.92,
-        "citation": "inv-1"
-      },
-      {
-        "source_type": "fact",
-        "source_id": "fact-2",
-        "content": "User asked for detailed explanation",
-        "score": 0.78,
-        "citation": "fact-2"
+        "citation": "turn-1"
       }
     ]
   }
@@ -352,7 +344,7 @@ Query agent identity state.
 
 ## Command: `index`
 
-Index content for future recall (hybrid search: FTS + vectors).
+Index raw assistant/user/tool turn content for future ledger search (chunked FTS + native libsql vectors).
 
 ### Request
 

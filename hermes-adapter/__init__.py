@@ -7,8 +7,9 @@ A Hermes plugin that provides identity persistence and long-term memory
 by wrapping the BeU (Become Unfurl) Rust binary.
 
 Commands exposed:
-- beu_recall: Search memory for relevant context
-- beu_distill: Compress turn history into memory artifacts
+- ledger_list: Browse recent ledger entries
+- ledger_search: Search ledger entries by meaning/keywords
+- ledger_get: Fetch one ledger entry
 
 Hooks:
 - pre_llm_call: Inject identity/invariants into prompt
@@ -117,28 +118,6 @@ class BeuProcess:
             logger.error(f"BeU command failed: {e}")
             return {"ok": False, "error": str(e)}
 
-    def recall(
-        self,
-        query: str,
-        namespace: str = DEFAULT_NAMESPACE,
-        limit: int = 5,
-        sources: Optional[list] = None,
-    ) -> list:
-        """Search memory for relevant information."""
-        payload = {
-            "query": query,
-            "limit": limit,
-            "sources": sources or ["invariant", "fact", "wake_pack"],
-        }
-
-        response = self.call("recall", payload, namespace)
-
-        if response.get("ok"):
-            return response.get("data", {}).get("hits", [])
-        else:
-            logger.warning(f"Recall failed: {response.get('error')}")
-            return []
-
     def distill(
         self,
         thread_id: str,
@@ -196,27 +175,6 @@ class BeuProcess:
             logger.warning(f"Status check failed: {response.get('error')}")
             return {"storage": "error"}
 
-    def index(
-        self,
-        entries: list,
-        namespace: str = DEFAULT_NAMESPACE,
-        embed: bool = False,
-    ) -> dict:
-        """Index ledger entries into BeU."""
-        payload = {
-            "namespace": namespace,
-            "embed": embed,
-            "entries": entries,
-        }
-
-        response = self.call("index", payload, namespace)
-
-        if response.get("ok"):
-            return response.get("data", {})
-        else:
-            logger.warning(f"Index failed: {response.get('error')}")
-            return {}
-
 
 def get_beu() -> BeuProcess:
     """Get or create the singleton BeU process instance."""
@@ -231,48 +189,65 @@ def get_beu() -> BeuProcess:
 # -------------------------------------------------------------------------------
 
 
-def beu_recall_handler(args: dict, **kw) -> str:
-    """Handle the beu_recall tool call."""
+def ledger_list_handler(args: dict, **kw) -> str:
+    namespace = _resolve_namespace(kw)
     beu = get_beu()
+    try:
+        result = beu.call(
+            "ledger_list",
+            {
+                "namespace": namespace,
+                "thread_id": args.get("thread_id"),
+                "kind": args.get("kind"),
+                "limit": int(args.get("limit", 20) or 20),
+            },
+        )
+        return json.dumps(result.get("data", {}), ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
+
+def ledger_search_handler(args: dict, **kw) -> str:
+    namespace = _resolve_namespace(kw)
+    beu = get_beu()
     query = args.get("query", "")
-    namespace = args.get("namespace", DEFAULT_NAMESPACE)
-    limit = args.get("limit", 5)
-    sources = args.get("sources")
-
     if not query:
-        return json.dumps({"success": False, "error": "Query is required"})
-
-    hits = beu.recall(query=query, namespace=namespace, limit=limit, sources=sources)
-
-    if not hits:
-        return json.dumps(
+        return json.dumps({"error": "query is required"})
+    try:
+        result = beu.call(
+            "ledger_search",
             {
-                "success": True,
-                "message": "No relevant memories found",
-                "hits": [],
-            }
+                "namespace": namespace,
+                "query": query,
+                "thread_id": args.get("thread_id"),
+                "kind": args.get("kind"),
+                "limit": int(args.get("limit", 8) or 8),
+            },
         )
+        return json.dumps(result.get("data", {}), ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
-    formatted_hits = []
-    for hit in hits:
-        formatted_hits.append(
+
+def ledger_get_handler(args: dict, **kw) -> str:
+    namespace = _resolve_namespace(kw)
+    beu = get_beu()
+    entry_id = args.get("entry_id", "")
+    if not entry_id:
+        return json.dumps({"error": "entry_id is required"})
+    try:
+        result = beu.call(
+            "ledger_get",
             {
-                "type": hit.get("source_type", "unknown"),
-                "id": hit.get("source_id", ""),
-                "content": hit.get("content", "")[:500],  # Truncate long content
-                "score": round(hit.get("score", 0.0), 2),
-                "citation": hit.get("citation", ""),
-            }
+                "namespace": namespace,
+                "entry_id": entry_id,
+            },
         )
-
-    return json.dumps(
-        {
-            "success": True,
-            "hits": formatted_hits,
-        },
-        ensure_ascii=False,
-    )
+        if not result.get("ok"):
+            return json.dumps({"error": result.get("error", f"ledger entry not found: {entry_id}")})
+        return json.dumps(result.get("data", {}), ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def beu_distill_handler(args: dict, **kw) -> str:
@@ -330,29 +305,35 @@ def _resolve_namespace(kwargs: dict) -> str:
 def _index_entry(
     *,
     namespace: str,
+    thread_id: str,
     entry_id: str,
     source_type: str,
     source_id: str,
     content: str,
     metadata: dict,
 ) -> None:
-    beu = get_beu()
     text = content.strip()
     if not text:
-      return
-    beu.index(
-        [
+        return
+    beu = get_beu()
+    payload = {
+        "namespace": namespace,
+        "entries": [
             {
                 "entry_id": entry_id,
                 "source_type": source_type,
-                "source_id": source_id,
+                "source_id": str(metadata.get("tool_call_id") or metadata.get("run_id") or entry_id),
                 "content": text[:2000],
-                "metadata": metadata,
+                "metadata": {
+                    **metadata,
+                    "thread_id": thread_id,
+                },
             }
         ],
-        namespace=namespace,
-        embed=False,
-    )
+    }
+    result = beu.call("index", payload)
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error", "index failed"))
 
 
 def pre_llm_call_hook(messages: list, **kwargs) -> Optional[str]:
@@ -361,13 +342,13 @@ def pre_llm_call_hook(messages: list, **kwargs) -> Optional[str]:
     Injects identity/invariants into the system prompt or returns
     context to be appended to the prompt.
     """
-    beu = get_beu()
     namespace = _resolve_namespace(kwargs)
 
     user_message = kwargs.get("user_message", "")
     if user_message:
         _index_entry(
             namespace=namespace,
+            thread_id=str(kwargs.get("session_id") or namespace),
             entry_id=f"{kwargs.get('session_id', namespace)}:{kwargs.get('model', 'llm')}:user",
             source_type="ledger_entry",
             source_id=str(kwargs.get("session_id") or namespace),
@@ -381,22 +362,7 @@ def pre_llm_call_hook(messages: list, **kwargs) -> Optional[str]:
         )
 
     try:
-        identity = beu.identity(query="all")
-
-        invariants = identity.get("invariants", [])
-        if not invariants:
-            return None
-
-        # Format active invariants as a context snippet
-        active = [inv for inv in invariants if inv.get("status") == "active"]
-        if not active:
-            return None
-
-        lines = ["# User Preferences & Identity"]
-        for inv in active[:5]:  # Limit to top 5
-            lines.append(f"- {inv.get('claim', 'Unknown')}")
-
-        return "\n".join(lines)
+        return None
 
     except Exception as e:
         logger.warning(f"pre_llm_call hook failed: {e}")
@@ -414,6 +380,7 @@ def post_llm_call_hook(response: str, messages: list, **kwargs) -> Optional[dict
     if assistant_response:
         _index_entry(
             namespace=namespace,
+            thread_id=str(kwargs.get("session_id") or namespace),
             entry_id=f"{kwargs.get('session_id', namespace)}:{kwargs.get('model', 'llm')}:assistant",
             source_type="ledger_entry",
             source_id=str(kwargs.get("session_id") or namespace),
@@ -432,6 +399,7 @@ def post_tool_call_hook(tool_name: str, args: dict, result: Any, task_id: str, *
     namespace = _resolve_namespace(kwargs)
     _index_entry(
         namespace=namespace,
+        thread_id=str(kwargs.get("session_id") or task_id or namespace),
         entry_id=f"{task_id}:{tool_name}:tool",
         source_type="ledger_entry",
         source_id=str(kwargs.get("tool_call_id") or tool_name),
@@ -447,11 +415,8 @@ def post_tool_call_hook(tool_name: str, args: dict, result: Any, task_id: str, *
 
 def on_session_start_hook(**kwargs) -> None:
     """Hook that runs when a new session starts."""
-    beu = get_beu()
-
     try:
-        status = beu.status()
-        logger.info(f"BeU memory initialized: {status.get('storage', 'unknown')}")
+        logger.info("BeU memory initialized")
     except Exception as e:
         logger.warning(f"Failed to initialize BeU: {e}")
 
@@ -475,79 +440,73 @@ def register(ctx) -> None:
     """
     logger.info("Registering BeU memory plugin")
 
-    # Register the recall tool
+    # Register ledger tools
     ctx.register_tool(
-        name="beu_recall",
+        name="ledger_list",
         toolset="memory",
         schema={
-            "name": "beu_recall",
-            "description": "Search long-term memory for relevant context, facts, and user preferences. Use this proactively when the user references past conversations or you need to recall specific information.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query describing what to recall",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of results (default: 5)",
-                        "default": 5,
-                    },
-                    "sources": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Sources to search: invariant, fact, wake_pack",
-                        "default": ["invariant", "fact", "wake_pack"],
-                    },
-                    "namespace": {
-                        "type": "string",
-                        "description": "Agent namespace (default: default)",
-                        "default": "default",
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-        handler=beu_recall_handler,
-        description="Search long-term memory",
-        emoji="🧠",
-    )
-
-    # Register the distill tool (for manual triggering)
-    ctx.register_tool(
-        name="beu_distill",
-        toolset="memory",
-        schema={
-            "name": "beu_distill",
-            "description": "Compress the current conversation into memory artifacts. Extracts facts, invariants, and creates a summary (wake_pack). Typically called automatically on context flush.",
+            "name": "ledger_list",
+            "description": "Browse recent ledger entries from runtime history with provenance-aware metadata. Use this to list or skim entries, not to search by content.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "thread_id": {
                         "type": "string",
-                        "description": "Unique thread/conversation identifier",
                     },
-                    "turn_id": {
+                    "kind": {
                         "type": "string",
-                        "description": "Current turn identifier",
                     },
-                    "thread_history": {
-                        "type": "array",
-                        "description": "Array of turn events to compress",
-                    },
-                    "namespace": {
-                        "type": "string",
-                        "description": "Agent namespace (default: default)",
-                        "default": "default",
+                    "limit": {
+                        "type": "integer",
                     },
                 },
-                "required": ["thread_id", "turn_id"],
             },
         },
-        handler=beu_distill_handler,
-        description="Compress conversation to memory",
-        emoji="🫧",
+        handler=ledger_list_handler,
+        description="Browse recent ledger entries from runtime history with provenance-aware metadata. Use this to list or skim entries, not to search by content.",
+    )
+
+    ctx.register_tool(
+        name="ledger_search",
+        toolset="memory",
+        schema={
+            "name": "ledger_search",
+            "description": "Search ledger entries by meaning and keywords across runtime history, then return matching ledger entries with provenance-aware metadata.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                    },
+                    "thread_id": {
+                        "type": "string",
+                    },
+                    "kind": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1},
+                },
+                "required": ["query"],
+            },
+        },
+        handler=ledger_search_handler,
+        description="Search ledger entries by meaning and keywords across runtime history, then return matching ledger entries with provenance-aware metadata.",
+    )
+
+    ctx.register_tool(
+        name="ledger_get",
+        toolset="memory",
+        schema={
+            "name": "ledger_get",
+            "description": "Fetch one ledger entry with full content, provenance, and citation metadata.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {"type": "string"},
+                },
+                "required": ["entry_id"],
+            },
+        },
+        handler=ledger_get_handler,
+        description="Fetch one ledger entry with full content, provenance, and citation metadata.",
     )
 
     # Register lifecycle hooks

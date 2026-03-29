@@ -32,6 +32,7 @@ function truncateText(value: string, max = 2000): string {
 
 async function indexTextEntry(params: {
   namespace: string;
+  threadId: string;
   entryId: string;
   sourceType: string;
   sourceId: string;
@@ -50,7 +51,10 @@ async function indexTextEntry(params: {
         source_type: params.sourceType,
         source_id: params.sourceId,
         content: truncateText(text),
-        metadata: params.metadata,
+        metadata: {
+          ...params.metadata,
+          thread_id: params.threadId,
+        },
       },
     ],
     { namespace: params.namespace, embed: false },
@@ -175,6 +179,7 @@ export default definePluginEntry({
     api.registerHook("llm_input", async (event, ctx) => {
       await indexTextEntry({
         namespace: resolveNamespace(ctx),
+        threadId: String(event.sessionId || event.runId || ctx.sessionKey || "default"),
         entryId: `${event.sessionId}:${event.runId || "llm_input"}:user`,
         sourceType: "ledger_entry",
         sourceId: event.runId || event.sessionId,
@@ -193,6 +198,7 @@ export default definePluginEntry({
     api.registerHook("llm_output", async (event, ctx) => {
       await indexTextEntry({
         namespace: resolveNamespace(ctx),
+        threadId: String(event.sessionId || event.runId || ctx.sessionKey || "default"),
         entryId: `${event.sessionId}:${event.runId || "llm_output"}:assistant`,
         sourceType: "ledger_entry",
         sourceId: event.runId || event.sessionId,
@@ -214,6 +220,7 @@ export default definePluginEntry({
         typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult, null, 2);
       await indexTextEntry({
         namespace: resolveNamespace(ctx),
+        threadId: String(ctx.sessionId || ctx.runId || ctx.sessionKey || "default"),
         entryId: `${ctx.sessionId || ctx.runId || "tool"}:${event.toolCallId || event.toolName}:tool`,
         sourceType: "ledger_entry",
         sourceId: event.toolCallId || event.toolName,
@@ -231,24 +238,96 @@ export default definePluginEntry({
 
     api.registerTool(
       async (ctx) => {
-        const { createBeuRecallTool } = await import("./tools/recall.js");
-        return createBeuRecallTool({
-          config: ctx.config,
-          agentSessionKey: ctx.sessionKey,
-        });
+        const beu = createBeuProcess({ namespace: ctx.sessionKey });
+        return {
+          name: "ledger_list",
+          description:
+            "Browse recent ledger entries from runtime history with provenance-aware metadata. Use this to list or skim entries, not to search by content.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              thread_id: { type: "string" },
+              kind: { type: "string" },
+              limit: { type: "number", minimum: 1, default: 20 },
+            },
+          },
+          handler: async (
+            params: { thread_id?: string; kind?: string; limit?: number },
+            ctx,
+          ) => {
+            const result = await beu.ledgerList({
+              thread_id: params.thread_id,
+              kind: params.kind,
+              limit: params.limit,
+            });
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(result.data ?? {}, null, 2) }],
+            };
+          },
+        };
       },
-      { names: ["beu_recall"] },
+      { names: ["ledger_list"] },
     );
 
     api.registerTool(
       async (ctx) => {
-        const { createBeuDistillTool } = await import("./tools/distill.js");
-        return createBeuDistillTool({
-          config: ctx.config,
-          agentSessionKey: ctx.sessionKey,
-        });
+        const beu = createBeuProcess({ namespace: ctx.sessionKey });
+        return {
+          name: "ledger_search",
+          description:
+            "Search ledger entries by meaning and keywords across runtime history, then return matching ledger entries with provenance-aware metadata.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              query: { type: "string" },
+              thread_id: { type: "string" },
+              kind: { type: "string" },
+              limit: { type: "number", minimum: 1, default: 8 },
+            },
+            required: ["query"],
+          },
+          handler: async (
+            params: { query: string; thread_id?: string; kind?: string; limit?: number },
+            ctx,
+          ) => {
+            const result = await beu.ledgerSearch({
+              query: params.query,
+              thread_id: params.thread_id,
+              kind: params.kind,
+              limit: params.limit,
+            });
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(result.data ?? {}, null, 2) }],
+            };
+          },
+        };
       },
-      { names: ["beu_distill"] },
+      { names: ["ledger_search"] },
+    );
+
+    api.registerTool(
+      async (ctx) => {
+        const beu = createBeuProcess({ namespace: ctx.sessionKey });
+        return {
+          name: "ledger_get",
+          description:
+            "Fetch one ledger entry with full content, provenance, and citation metadata.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              entry_id: { type: "string" },
+            },
+            required: ["entry_id"],
+          },
+          handler: async (params: { entry_id: string }, ctx) => {
+            const result = await beu.ledgerGet(params.entry_id);
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(result.data ?? {}, null, 2) }],
+            };
+          },
+        };
+      },
+      { names: ["ledger_get"] },
     );
   },
 });

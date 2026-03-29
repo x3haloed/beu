@@ -61,6 +61,9 @@ impl Response {
 pub enum Command {
     Distill,
     Recall,
+    LedgerList,
+    LedgerSearch,
+    LedgerGet,
     Rebuild,
     Identity,
     Index,
@@ -72,6 +75,9 @@ impl Command {
         match s {
             "distill" => Some(Command::Distill),
             "recall" => Some(Command::Recall),
+            "ledger_list" => Some(Command::LedgerList),
+            "ledger_search" => Some(Command::LedgerSearch),
+            "ledger_get" => Some(Command::LedgerGet),
             "rebuild" => Some(Command::Rebuild),
             "identity" => Some(Command::Identity),
             "index" => Some(Command::Index),

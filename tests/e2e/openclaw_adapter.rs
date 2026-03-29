@@ -78,7 +78,7 @@ void (async () => {
     let beu = payload["beu"].as_object().expect("beu plugin missing");
 
     assert_eq!(beu["enabled"], true, "beu plugin should load successfully");
-    assert_eq!(beu["tools"], 2, "beu should register exactly two tools");
+    assert_eq!(beu["tools"], 3, "beu should register exactly three tools");
     assert_eq!(beu["hooks"], 3, "beu memory plugin should register passive indexing hooks");
     assert!(beu["error"].is_null(), "beu plugin should not report an error");
     assert_eq!(payload["memoryPromptSections"], 1);
@@ -119,52 +119,49 @@ void (async () => {
     },
   });
 
-  const recallTool = registrations.tools.find((tool) => tool.names?.includes("beu_recall"));
-  const distillTool = registrations.tools.find((tool) => tool.names?.includes("beu_distill"));
-  if (!recallTool || !distillTool) {
-    throw new Error("missing beu tools");
+  const listTool = registrations.tools.find((tool) => tool.names?.includes("ledger_list"));
+  const searchTool = registrations.tools.find((tool) => tool.names?.includes("ledger_search"));
+  const getTool = registrations.tools.find((tool) => tool.names?.includes("ledger_get"));
+  if (!listTool || !searchTool || !getTool) {
+    throw new Error("missing ledger tools");
   }
 
   const beu = createBeuProcess({ namespace: "__NAMESPACE__" });
-  const statusBefore = await beu.status();
-  const recall = await recallTool.factory({ sessionKey: "__NAMESPACE__" });
-  const distill = await distillTool.factory({ sessionKey: "__NAMESPACE__" });
+  const list = await listTool.factory({ sessionKey: "__NAMESPACE__" });
+  const search = await searchTool.factory({ sessionKey: "__NAMESPACE__" });
+  const get = await getTool.factory({ sessionKey: "__NAMESPACE__" });
 
-  const seed = await distill.handler({
-    thread_id: "thread-1",
-    turn_id: "turn-1",
-    thread_history: [
-      {
-        entry_id: "seed-entry-1",
+  const emptyBefore = (await beu.ledgerList({
+    thread_id: "__NAMESPACE__",
+    limit: 5,
+  })).data;
+
+  const seed = (await beu.index([
+    {
+      entry_id: "seed-entry-1",
+      source_type: "ledger_entry",
+      source_id: "turn-1",
+      content: "User prefers detailed explanations",
+      metadata: {
         kind: "user_turn",
-        content: "User prefers detailed explanations",
+        thread_id: "__NAMESPACE__",
+        turn_id: "turn-1",
         citation: "turn-1:user",
-        created_at: "2026-03-28T00:00:00.000Z"
       },
-      {
-        entry_id: "seed-entry-2",
-        kind: "agent_turn",
-        content: "Understood, I will provide detailed explanations.",
-        citation: "turn-1:agent",
-        created_at: "2026-03-28T00:00:01.000Z"
-      }
-    ]
-  }, { sessionKey: "__NAMESPACE__" });
+    },
+  ], { namespace: "__NAMESPACE__", embed: false })).data;
 
-  const afterSeed = await recall.handler({
+  const afterSeed = (await beu.ledgerSearch({
     query: "detailed explanations",
     limit: 5,
-    sources: ["wake_pack"],
-  }, { sessionKey: "__NAMESPACE__" });
+    thread_id: "__NAMESPACE__",
+    kind: "user_turn",
+  })).data;
 
-  const finalCheck = await recall.handler({
-    query: "detailed explanations",
-    limit: 5,
-    sources: ["wake_pack"],
-  }, { sessionKey: "__NAMESPACE__" });
+  const finalCheck = (await beu.ledgerGet("seed-entry-1")).data;
 
   console.log(JSON.stringify({
-    statusBefore,
+    emptyBefore,
     seed,
     afterSeed,
     finalCheck,
@@ -186,25 +183,13 @@ void (async () => {
 
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let payload: serde_json::Value = serde_json::from_str(stdout.trim()).expect("json output");
-    assert_ne!(payload["statusBefore"]["storage"], "error");
-    let seed_text = payload["seed"]["content"][0]["text"].as_str().unwrap_or("");
-    assert!(
-        seed_text.contains("Distillation complete"),
-        "seed distillation should succeed; got: {}",
-        seed_text
+    assert_eq!(payload["emptyBefore"]["entries"].as_array().map(|v| v.len()), Some(0));
+    assert!(payload["seed"]["indexed"].as_i64().unwrap_or(0) >= 1);
+    assert_eq!(payload["afterSeed"]["entries"].as_array().map(|v| v.len()), Some(1));
+    assert_eq!(payload["afterSeed"]["entries"][0]["kind"], "user_turn");
+    assert_eq!(
+        payload["afterSeed"]["entries"][0]["content"],
+        "User prefers detailed explanations"
     );
-    assert!(
-        payload["afterSeed"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or("")
-            .contains("User prefers detailed explanations"),
-        "seeded memory should be recallable"
-    );
-    assert!(
-        payload["finalCheck"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or("")
-            .contains("User prefers detailed explanations"),
-        "recall should stay deterministic"
-    );
+    assert_eq!(payload["finalCheck"]["content"], "User prefers detailed explanations");
 }

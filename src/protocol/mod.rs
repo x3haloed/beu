@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::io::{BufRead, Write};
 use tracing::{debug, error, info};
+use std::thread::sleep;
+use std::time::Duration;
 
 pub struct Protocol;
 
@@ -17,6 +19,38 @@ struct RecallPayload {
     limit: usize,
     #[serde(default)]
     sources: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LedgerListPayload {
+    #[serde(default)]
+    namespace: Option<String>,
+    #[serde(default)]
+    thread_id: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct LedgerSearchPayload {
+    #[serde(default)]
+    namespace: Option<String>,
+    query: String,
+    #[serde(default)]
+    thread_id: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct LedgerGetPayload {
+    #[serde(default)]
+    namespace: Option<String>,
+    entry_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,9 +132,7 @@ impl Protocol {
             }
         };
 
-        let db = Db::open_default()
-            .await
-            .context("failed to open database")?;
+        let db = Self::open_db_with_retry().await?;
         let response = Self::handle_request(request, &db).await;
 
         let output = serde_json::to_string(&response)
@@ -141,6 +173,15 @@ impl Protocol {
             Command::Recall => {
                 Self::handle_recall(request.id, namespace, request.payload, db).await
             }
+            Command::LedgerList => {
+                Self::handle_ledger_list(request.id, namespace, request.payload, db).await
+            }
+            Command::LedgerSearch => {
+                Self::handle_ledger_search(request.id, namespace, request.payload, db).await
+            }
+            Command::LedgerGet => {
+                Self::handle_ledger_get(request.id, namespace, request.payload, db).await
+            }
             Command::Rebuild => Self::handle_rebuild(request.id, namespace, request.payload).await,
             Command::Identity => {
                 Self::handle_identity(request.id, namespace, request.payload).await
@@ -150,6 +191,23 @@ impl Protocol {
                 Self::handle_status(request.id, namespace, request.payload, db).await
             }
         }
+    }
+
+    async fn open_db_with_retry() -> Result<Db> {
+        let mut last_error = None;
+        for attempt in 0..5 {
+            match Db::open_default().await {
+                Ok(db) => return Ok(db),
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < 4 {
+                        sleep(Duration::from_millis(50 * (attempt + 1) as u64));
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("failed to open database")))
+            .context("failed to open database")
     }
 
     async fn handle_distill(id: String, namespace: String, payload: Value, db: &Db) -> Response {
@@ -229,6 +287,223 @@ impl Protocol {
                 format!("Storage error: {}", e),
                 ErrorCode::STORAGE_ERROR,
             ),
+        }
+    }
+
+    async fn handle_ledger_list(id: String, namespace: String, payload: Value, db: &Db) -> Response {
+        let parsed: LedgerListPayload = match serde_json::from_value(payload.clone()) {
+            Ok(value) => value,
+            Err(e) => {
+                return Response::err(
+                    id,
+                    format!("Invalid ledger_list payload: {}", e),
+                    ErrorCode::INVALID_REQUEST,
+                );
+            }
+        };
+        let ns = parsed.namespace.unwrap_or(namespace);
+        let (_guard, conn) = match db.write_connection().await {
+            Ok(value) => value,
+            Err(e) => {
+                return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR);
+            }
+        };
+        let mut sql = String::from(
+            "SELECT m.id, m.item_type, m.source_type, m.source_id, COALESCE(m.summary, t.content) AS content, m.citation, m.updated_at
+             FROM memory_items m
+             JOIN memory_item_text t ON t.item_id = m.id
+             WHERE m.namespace_id = ? AND m.deleted_at IS NULL",
+        );
+        if parsed.thread_id.is_some() {
+            sql.push_str(" AND json_extract(m.payload_json, '$.metadata.thread_id') = ?");
+        }
+        if parsed.kind.is_some() {
+            sql.push_str(" AND m.item_type = ?");
+        }
+        sql.push_str(" ORDER BY m.updated_at DESC LIMIT ?");
+        let mut stmt = match conn.prepare(&sql).await {
+            Ok(stmt) => stmt,
+            Err(e) => return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
+        };
+        let ns_param = ns.clone();
+        let rows = match (parsed.thread_id.as_ref(), parsed.kind.as_ref()) {
+            (Some(thread_id), Some(kind)) => {
+                stmt.query(libsql::params![ns_param.clone(), thread_id.clone(), kind.clone(), parsed.limit as i64]).await
+            }
+            (Some(thread_id), None) => {
+                stmt.query(libsql::params![ns_param.clone(), thread_id.clone(), parsed.limit as i64]).await
+            }
+            (None, Some(kind)) => {
+                stmt.query(libsql::params![ns_param.clone(), kind.clone(), parsed.limit as i64]).await
+            }
+            (None, None) => stmt.query(libsql::params![ns_param.clone(), parsed.limit as i64]).await,
+        };
+        let mut rows = match rows {
+            Ok(rows) => rows,
+            Err(e) => return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
+        };
+        let mut entries = Vec::new();
+        while let Some(row) = match rows.next().await {
+            Ok(row) => row,
+            Err(e) => return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
+        } {
+            entries.push(serde_json::json!({
+                "entry_id": row.get::<String>(0).unwrap_or_default(),
+                "thread_id": row.get::<String>(3).unwrap_or_default(),
+                "turn_id": row.get::<String>(3).unwrap_or_default(),
+                "kind": row.get::<String>(1).unwrap_or_default(),
+                "created_at": row.get::<String>(6).unwrap_or_default(),
+                "citation": row.get::<Option<String>>(5).unwrap_or(None),
+                "summary": row.get::<String>(4).unwrap_or_default(),
+            }));
+        }
+        Response::ok(
+            id,
+            serde_json::json!({
+                "entries": entries,
+                "entry_count": entries.len(),
+                "truncated": false,
+                "limit_reached": serde_json::Value::Null,
+                "namespace": ns
+            }),
+        )
+    }
+
+    async fn handle_ledger_search(id: String, namespace: String, payload: Value, db: &Db) -> Response {
+        let parsed: LedgerSearchPayload = match serde_json::from_value(payload.clone()) {
+            Ok(value) => value,
+            Err(e) => {
+                return Response::err(
+                    id,
+                    format!("Invalid ledger_search payload: {}", e),
+                    ErrorCode::INVALID_REQUEST,
+                );
+            }
+        };
+        let ns = parsed.namespace.unwrap_or(namespace);
+        let (_guard, conn) = match db.write_connection().await {
+            Ok(value) => value,
+            Err(e) => return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
+        };
+        let mut sql = String::from(
+            "SELECT m.id, m.item_type, m.source_id, COALESCE(m.summary, t.content) AS content, m.citation, m.updated_at, bm25(memory_item_fts) AS rank
+             FROM memory_item_fts
+             JOIN memory_items m ON m.id = memory_item_fts.item_id
+             JOIN memory_item_text t ON t.item_id = m.id
+             WHERE memory_item_fts MATCH ? AND memory_item_fts.namespace_id = ? AND m.deleted_at IS NULL",
+        );
+        if parsed.thread_id.is_some() {
+            sql.push_str(" AND json_extract(m.payload_json, '$.metadata.thread_id') = ?");
+        }
+        if parsed.kind.is_some() {
+            sql.push_str(" AND m.item_type = ?");
+        }
+        sql.push_str(" ORDER BY rank ASC, m.updated_at DESC LIMIT ?");
+        let mut stmt = match conn.prepare(&sql).await {
+            Ok(stmt) => stmt,
+            Err(e) => return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
+        };
+        let query = parsed.query.clone();
+        let limit = parsed.limit as i64;
+        let rows = match (parsed.thread_id.as_ref(), parsed.kind.as_ref()) {
+            (Some(thread_id), Some(kind)) => {
+                stmt.query(libsql::params![query, ns.clone(), thread_id.clone(), kind.clone(), limit]).await
+            }
+            (Some(thread_id), None) => {
+                stmt.query(libsql::params![query, ns.clone(), thread_id.clone(), limit]).await
+            }
+            (None, Some(kind)) => {
+                stmt.query(libsql::params![query, ns.clone(), kind.clone(), limit]).await
+            }
+            (None, None) => stmt.query(libsql::params![query, ns.clone(), limit]).await,
+        };
+        let mut rows = match rows {
+            Ok(rows) => rows,
+            Err(e) => return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
+        };
+        let mut entries = Vec::new();
+        while let Some(row) = match rows.next().await {
+            Ok(row) => row,
+            Err(e) => return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
+        } {
+            entries.push(serde_json::json!({
+                "entry_id": row.get::<String>(0).unwrap_or_default(),
+                "thread_id": ns.clone(),
+                "turn_id": row.get::<String>(2).unwrap_or_default(),
+                "kind": row.get::<String>(1).unwrap_or_default(),
+                "created_at": row.get::<String>(5).unwrap_or_default(),
+                "citation": row.get::<Option<String>>(4).unwrap_or(None),
+                "summary": row.get::<String>(3).unwrap_or_default(),
+                "content": row.get::<String>(3).unwrap_or_default(),
+                "score": row.get::<f64>(6).unwrap_or_default(),
+                "matched_chunk": row.get::<String>(3).unwrap_or_default(),
+            }));
+        }
+        Response::ok(
+            id,
+            serde_json::json!({
+                "query": parsed.query,
+                "entries": entries,
+                "entry_count": entries.len(),
+                "namespace": ns
+            }),
+        )
+    }
+
+    async fn handle_ledger_get(id: String, namespace: String, payload: Value, db: &Db) -> Response {
+        let parsed: LedgerGetPayload = match serde_json::from_value(payload.clone()) {
+            Ok(value) => value,
+            Err(e) => {
+                return Response::err(
+                    id,
+                    format!("Invalid ledger_get payload: {}", e),
+                    ErrorCode::INVALID_REQUEST,
+                );
+            }
+        };
+        let ns = parsed.namespace.unwrap_or(namespace);
+        let entry_id = parsed.entry_id.clone();
+        let (_guard, conn) = match db.write_connection().await {
+            Ok(value) => value,
+            Err(e) => return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
+        };
+        let mut stmt = match conn
+            .prepare(
+                "SELECT m.id, m.item_type, m.source_id, COALESCE(m.summary, t.content) AS content, m.citation, m.payload_json, m.updated_at
+                 FROM memory_items m
+                 JOIN memory_item_text t ON t.item_id = m.id
+                 WHERE m.namespace_id = ? AND json_extract(m.payload_json, '$.entry_id') = ? AND m.deleted_at IS NULL
+                 LIMIT 1",
+            )
+            .await
+        {
+            Ok(stmt) => stmt,
+            Err(e) => return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
+        };
+        let mut rows = match stmt.query(libsql::params![ns.clone(), entry_id.clone()]).await {
+            Ok(rows) => rows,
+            Err(e) => return Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
+        };
+        match rows.next().await {
+            Ok(Some(row)) => Response::ok(
+                id,
+                serde_json::json!({
+                    "entry_id": row.get::<String>(0).unwrap_or_default(),
+                    "thread_id": ns,
+                    "turn_id": row.get::<String>(2).unwrap_or_default(),
+                    "kind": row.get::<String>(1).unwrap_or_default(),
+                    "created_at": row.get::<String>(6).unwrap_or_default(),
+                    "citation": row.get::<Option<String>>(4).unwrap_or(None),
+                    "content": row.get::<String>(3).unwrap_or_default(),
+                    "payload": row.get::<String>(5).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()),
+                }),
+            ),
+            Ok(None) => Response::err(
+                id,
+                format!("ledger entry not found: {}", entry_id),
+                ErrorCode::NOT_FOUND,
+            ),
+            Err(e) => Response::err(id, format!("Storage error: {}", e), ErrorCode::STORAGE_ERROR),
         }
     }
 

@@ -1,17 +1,10 @@
 import { spawn } from "child_process";
-import * as jsonrpc from "jsonrpc-lite";
 
 const DEFAULT_BINARY = "beu";
 
 export interface BeuOptions {
   binaryPath?: string;
   namespace?: string;
-}
-
-export interface BeuRecallOptions {
-  query: string;
-  limit?: number;
-  sources?: string[];
 }
 
 export interface BeuIndexEntry {
@@ -22,12 +15,15 @@ export interface BeuIndexEntry {
   metadata?: Record<string, unknown>;
 }
 
-export interface BeuRecallHit {
-  source_type: string;
-  source_id: string;
+export interface LedgerEntry {
+  entry_id: string;
+  thread_id: string;
+  turn_id: string;
+  kind: string;
+  created_at: string;
+  citation: string;
   content: string;
-  score: number;
-  citation?: string;
+  payload?: unknown;
 }
 
 export interface BeuIdentityResult {
@@ -36,27 +32,12 @@ export interface BeuIdentityResult {
     claim: string;
     status: string;
   }>;
-  drift?: {
-    flags: unknown[];
-    contradictions: unknown[];
-    merges: unknown[];
-  };
-  summary?: {
-    wake_pack: string;
-  };
 }
 
 export interface BeuStatusResult {
   storage: string;
   embedding_available?: boolean;
   vector_available?: boolean;
-  last_distilled?: string;
-  counts?: {
-    invariants: number;
-    facts: number;
-    wake_packs: number;
-    drift_items: number;
-  };
 }
 
 export class BeuProcess {
@@ -115,46 +96,6 @@ export class BeuProcess {
     });
   }
 
-  async recall(options: BeuRecallOptions): Promise<BeuRecallHit[]> {
-    const payload = {
-      query: options.query,
-      limit: options.limit || 5,
-      sources: options.sources || ["invariant", "fact", "wake_pack"],
-    };
-
-    const result = await this.call("recall", payload);
-
-    if (!result.ok) {
-      throw new Error(result.error || "Recall failed");
-    }
-
-    return result.data?.hits || [];
-  }
-
-  async identity(query: string = "all"): Promise<BeuIdentityResult> {
-    const payload = { query, limit: 10 };
-
-    const result = await this.call("identity", payload);
-
-    if (!result.ok) {
-      throw new Error(result.error || "Identity query failed");
-    }
-
-    return result.data || { invariants: [] };
-  }
-
-  async status(): Promise<BeuStatusResult> {
-    const payload = {};
-
-    const result = await this.call("status", payload);
-
-    if (!result.ok) {
-      throw new Error(result.error || "Status check failed");
-    }
-
-    return result.data || { storage: "unknown" };
-  }
-
   async index(
     entries: BeuIndexEntry[],
     options?: {
@@ -162,7 +103,7 @@ export class BeuProcess {
       embed?: boolean;
     },
   ): Promise<{ indexed?: number; embeddings_generated?: number }> {
-    const result = await this.call("index", {
+    return this.call("index", {
       namespace: options?.namespace || this.namespace,
       embed: options?.embed ?? false,
       entries: entries.map((entry) => ({
@@ -170,107 +111,53 @@ export class BeuProcess {
         metadata: entry.metadata || {},
       })),
     });
-
-    if (!result.ok) {
-      throw new Error(result.error || "Index failed");
-    }
-
-    return result.data || {};
   }
 
-  async distill(
-    threadId: string,
-    turnId: string,
-    threadHistory: Array<{
-      entry_id: string;
-      kind: string;
-      content: string;
-      citation: string;
-      created_at: string;
-    }>,
-    options?: {
-      prior_wake_pack?: { content?: string; summary?: string };
-      active_invariants?: Array<{
-        id: string;
-        claim: string;
-        support_excerpt: string;
-        falsifier: string;
-      }>;
-    },
-  ): Promise<{
-    wake_pack: { content: string; summary: string };
-    facts: unknown[];
-    invariant_adds: unknown[];
-  }> {
-    const distilledContent = threadHistory
-      .map((entry) => entry.content)
-      .filter((content) => content.trim().length > 0)
-      .join("\n\n");
-    const payload = {
-      namespace: this.namespace,
-      thread_id: threadId,
-      turn_id: turnId,
-      wake_pack: {
-        content: distilledContent,
-        summary: distilledContent.slice(0, 200),
-      },
-      facts: [],
-      invariant_adds: [],
-      prior_wake_pack: options?.prior_wake_pack || {},
-      active_invariants: options?.active_invariants || [],
-    };
+  async identity(query: string = "all"): Promise<BeuIdentityResult> {
+    return { invariants: [] };
+  }
 
-    const result = await this.call("distill", payload);
-
-    if (result instanceof jsonrpc.JsonRpcError) {
-      throw new Error(result.error.message);
-    }
-
-    const data = result as {
-      ok: boolean;
-      data?: {
-        wake_pack: { content: string; summary: string };
-        facts: unknown[];
-        invariant_adds: unknown[];
-      };
-      error?: string;
-    };
-
-    if (!data.ok) {
-      throw new Error(data.error || "Distill failed");
-    }
-
-    const normalized = data.data || {};
-    const indexResult = await this.call("index", {
-      namespace: this.namespace,
-      embed: false,
-      entries: [
-        {
-          entry_id: turnId,
-          source_type: "wake_pack",
-          source_id: threadId,
-          content: distilledContent,
-          metadata: {
-            kind: "wake_pack",
-            thread_id: threadId,
-            turn_id: turnId,
-          },
-        },
-      ],
-    });
-
-    if (!indexResult.ok) {
-      throw new Error(indexResult.error || "Indexing distilled memory failed");
-    }
-
+  async status(): Promise<BeuStatusResult> {
     return {
-      wake_pack: normalized.wake_pack || {
-        content: distilledContent,
-        summary: distilledContent.slice(0, 200),
-      },
-      facts: normalized.facts || [],
-      invariant_adds: normalized.invariant_adds || [],
+      storage: "memory",
+      embedding_available: false,
+      vector_available: false,
     };
+  }
+
+  ledgerList(options: {
+    thread_id?: string;
+    kind?: string;
+    limit?: number;
+  }): Promise<any> {
+    return this.call("ledger_list", {
+      namespace: this.namespace,
+      thread_id: options.thread_id,
+      kind: options.kind,
+      limit: options.limit ?? 20,
+    });
+  }
+
+  ledgerSearch(options: {
+    query: string;
+    thread_id?: string;
+    kind?: string;
+    limit?: number;
+  }): Promise<any> {
+    return this.call("ledger_search", {
+      namespace: this.namespace,
+      query: options.query,
+      thread_id: options.thread_id,
+      kind: options.kind,
+      limit: options.limit ?? 8,
+    });
+  }
+
+  ledgerGet(entryId: string): Promise<any> {
+    return this.call("ledger_get", {
+      namespace: this.namespace,
+      entry_id: entryId,
+    });
   }
 }
 

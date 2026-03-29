@@ -4,8 +4,9 @@ description: BetterClaw memory plugin for Hermes - identity persistence, continu
 author: ""
 requires_env: []
 provides_tools:
-  - beu_recall
-  - beu_distill
+  - ledger_list
+  - ledger_search
+  - ledger_get
 provides_hooks:
   - pre_llm_call
   - post_llm_call

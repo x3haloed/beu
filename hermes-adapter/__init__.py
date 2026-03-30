@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -309,6 +310,17 @@ def _resolve_namespace(kwargs: dict) -> str:
     )
 
 
+def _deep_merge_dicts(base: dict, updates: dict) -> dict:
+    """Recursively merge update values into a copy of base."""
+    merged = dict(base or {})
+    for key, value in (updates or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dicts(merged.get(key, {}), value)
+        else:
+            merged[key] = value
+    return merged
+
+
 BEU_CONFIG_ENV = "BEU_CONFIG_PATH"
 BEU_EMBEDDING_ENV_KEYS = {
     "provider": "BEU_EMBEDDINGS_PROVIDER",
@@ -319,6 +331,45 @@ BEU_EMBEDDING_ENV_KEYS = {
 BEU_DEFAULT_CONFIG_FILENAMES = ("beu.yaml", "beu.yml")
 
 
+def _beu_config_candidate_paths() -> list[Path]:
+    candidate_paths = []
+    env_path = os.environ.get(BEU_CONFIG_ENV, "").strip()
+    if env_path:
+        candidate_paths.append(Path(env_path).expanduser())
+
+    adapter_dir = Path(__file__).resolve().parent
+    candidate_paths.extend(adapter_dir / name for name in BEU_DEFAULT_CONFIG_FILENAMES)
+    return candidate_paths
+
+
+def _resolve_beu_config_path(prefer_existing: bool = True) -> Path:
+    """Return the active BeU config path.
+
+    If prefer_existing is True, return the first config file that already exists.
+    Otherwise return the preferred write location even if it has not been created yet.
+    """
+    candidate_paths = _beu_config_candidate_paths()
+    if prefer_existing:
+        for path in candidate_paths:
+            if path.is_file():
+                return path
+    return candidate_paths[0] if candidate_paths else Path(__file__).resolve().parent / "beu.yaml"
+
+
+def _read_beu_config_data(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        logger.warning("Failed to read BeU config %s: %s", path, exc)
+        return {}
+    if isinstance(data, dict):
+        return data
+    logger.warning("BeU config %s must contain a mapping at the top level", path)
+    return {}
+
+
 def _load_beu_config_file() -> dict:
     """Load BeU-local configuration from disk.
 
@@ -327,28 +378,7 @@ def _load_beu_config_file() -> dict:
     2. beu.yaml next to this adapter
     3. beu.yml next to this adapter
     """
-    candidate_paths = []
-    env_path = os.environ.get(BEU_CONFIG_ENV, "").strip()
-    if env_path:
-        candidate_paths.append(Path(env_path).expanduser())
-
-    adapter_dir = Path(__file__).resolve().parent
-    candidate_paths.extend(adapter_dir / name for name in BEU_DEFAULT_CONFIG_FILENAMES)
-
-    for path in candidate_paths:
-        if not path.is_file():
-            continue
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception as exc:
-            logger.warning("Failed to read BeU config %s: %s", path, exc)
-            return {}
-        if isinstance(data, dict):
-            return data
-        logger.warning("BeU config %s must contain a mapping at the top level", path)
-        return {}
-
-    return {}
+    return _read_beu_config_data(_resolve_beu_config_path(prefer_existing=True))
 
 
 def _collect_beu_embedding_settings() -> dict:

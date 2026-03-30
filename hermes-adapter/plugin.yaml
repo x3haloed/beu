@@ -1,8 +1,6 @@
 name: beu
-version: "0.1.0"
-description: BetterClaw memory plugin for Hermes - identity persistence, continuous learning, and long-term memory
-author: ""
-requires_env: []
+version: 0.1.0
+description: BeU memory plugin for Hermes - identity persistence, continuous learning, and long-term memory
 provides_tools:
   - ledger_list
   - ledger_search

@@ -775,6 +775,7 @@ async fn embed_entries(
         .context("failed to build embeddings provider")?;
     let request = EmbeddingModelOptions::builder()
         .input(entries.iter().map(|entry| entry.content.clone()).collect())
+        .dimensions(None)
         .build()
         .context("failed to build embedding request")?;
     let response: Vec<Vec<f32>> = model

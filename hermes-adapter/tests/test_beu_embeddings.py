@@ -26,6 +26,39 @@ def _install_runtime_provider_module(*, requested_provider: str, runtime: dict):
     return {"hermes_cli": pkg, "hermes_cli.runtime_provider": runtime_mod}
 
 
+class TestBeUHookInvocation(unittest.TestCase):
+    def test_llm_hooks_accept_hermes_keyword_invocation(self):
+        with patch.object(beu, "_index_entry") as index_entry:
+            pre_result = beu.pre_llm_call_hook(
+                session_id="s1",
+                user_message="hello",
+                conversation_history=[],
+                model="test-model",
+                platform="cli",
+            )
+            post_result = beu.post_llm_call_hook(
+                session_id="s1",
+                assistant_response="world",
+                user_message="hello",
+                conversation_history=[],
+                model="test-model",
+                platform="cli",
+            )
+
+        self.assertIsNone(pre_result)
+        self.assertIsNone(post_result)
+        self.assertEqual(index_entry.call_count, 2)
+
+    def test_llm_hooks_ignore_empty_turns_without_error(self):
+        with patch.object(beu, "_index_entry") as index_entry:
+            pre_result = beu.pre_llm_call_hook(session_id="s1", user_message="")
+            post_result = beu.post_llm_call_hook(session_id="s1", assistant_response="")
+
+        self.assertIsNone(pre_result)
+        self.assertIsNone(post_result)
+        index_entry.assert_not_called()
+
+
 class TestBeUEmbeddingResolution(unittest.TestCase):
     def test_beu_local_embeddings_config_wins(self):
         with TemporaryDirectory() as tmpdir:

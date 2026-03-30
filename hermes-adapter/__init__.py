@@ -534,7 +534,7 @@ def _index_entry(
         raise RuntimeError(result.get("error", "index failed"))
 
 
-def pre_llm_call_hook(messages: list, **kwargs) -> Optional[str]:
+def pre_llm_call_hook(**kwargs) -> Optional[str]:
     """Hook that runs before each LLM call.
 
     Injects identity/invariants into the system prompt or returns
@@ -568,14 +568,14 @@ def pre_llm_call_hook(messages: list, **kwargs) -> Optional[str]:
         return None
 
 
-def post_llm_call_hook(response: str, messages: list, **kwargs) -> Optional[dict]:
+def post_llm_call_hook(**kwargs) -> Optional[dict]:
     """Hook that runs after each LLM call.
 
     Could trigger distillation if configured. For now, this is a
     no-op since distillation requires explicit triggering.
     """
     namespace = _resolve_namespace(kwargs)
-    assistant_response = kwargs.get("assistant_response") or response
+    assistant_response = kwargs.get("assistant_response") or kwargs.get("response")
     if assistant_response:
         _index_entry(
             namespace=namespace,

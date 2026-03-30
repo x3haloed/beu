@@ -767,7 +767,7 @@ async fn embed_entries(
     }
     let api_key = provider.api_key.clone().unwrap_or_default();
     let base_url = provider.base_url.clone().unwrap_or_default();
-    if api_key.trim().is_empty() || base_url.trim().is_empty() {
+    if base_url.trim().is_empty() {
         return Ok(vec![None; entries.len()]);
     }
 

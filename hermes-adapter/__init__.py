@@ -57,11 +57,25 @@ class BeuProcess:
     _lock = threading.Lock()
 
     def __init__(self, binary_path: Optional[str] = None):
-        self.binary_path = (
-            binary_path or os.environ.get("BEU_BINARY_PATH") or DEFAULT_BEU_BINARY
-        )
+        self.binary_path = self._resolve_binary_path(binary_path)
         self.process: Optional[subprocess.Popen] = None
         self._ensure_binary()
+
+    def _resolve_binary_path(self, binary_path: Optional[str]) -> str:
+        if binary_path:
+            return binary_path
+
+        env_binary = os.environ.get("BEU_BINARY_PATH")
+        if env_binary:
+            env_path = Path(env_binary)
+            if env_path.is_absolute():
+                return env_binary
+
+        hermes_binary = HERMES_HOME / "plugins" / "hermes-adapter" / "beu"
+        if hermes_binary.is_absolute():
+            return str(hermes_binary)
+
+        return DEFAULT_BEU_BINARY
 
     def _ensure_binary(self) -> None:
         """Check that the binary exists and is executable."""

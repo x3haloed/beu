@@ -45,5 +45,8 @@ print(json.dumps({
     assert_eq!(beu["enabled"], true, "beu plugin should load successfully");
     assert_eq!(beu["tools"], 3, "beu should register exactly three tools");
     assert_eq!(beu["hooks"], 5, "beu should register exactly five hooks");
-    assert!(beu["error"].is_null(), "beu plugin should not report an error");
+    assert!(
+        beu["error"].is_null(),
+        "beu plugin should not report an error"
+    );
 }

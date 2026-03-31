@@ -51,6 +51,17 @@ pub async fn run(db: &Db) -> anyhow::Result<()> {
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS distill_state (
+            namespace_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            hook_count INTEGER NOT NULL DEFAULT 0,
+            last_turn_id TEXT,
+            last_event_kind TEXT,
+            last_distilled_at TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(namespace_id, thread_id)
+        );
+
         CREATE TABLE IF NOT EXISTS ledger_entries (
             id TEXT PRIMARY KEY,
             namespace_id TEXT NOT NULL,

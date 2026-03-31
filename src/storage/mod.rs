@@ -94,6 +94,83 @@ impl Db {
         }
     }
 
+    pub async fn note_distill_hook(
+        &self,
+        namespace_id: &str,
+        thread_id: &str,
+        turn_id: &str,
+        event_kind: &str,
+    ) -> anyhow::Result<i64> {
+        let (_guard, conn) = self.write_connection().await?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO distill_state (namespace_id, thread_id, hook_count, last_turn_id, last_event_kind, updated_at)
+             VALUES (?, ?, 1, ?, ?, ?)
+             ON CONFLICT(namespace_id, thread_id) DO UPDATE SET
+                hook_count = hook_count + 1,
+                last_turn_id = excluded.last_turn_id,
+                last_event_kind = excluded.last_event_kind,
+                updated_at = excluded.updated_at",
+            libsql::params![
+                namespace_id,
+                thread_id,
+                turn_id,
+                event_kind,
+                now.clone(),
+            ],
+        )
+        .await?;
+
+        let mut rows = conn
+            .query(
+                "SELECT hook_count FROM distill_state WHERE namespace_id = ? AND thread_id = ?",
+                libsql::params![namespace_id, thread_id],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(row.get(0)?),
+            None => Ok(0),
+        }
+    }
+
+    pub async fn clear_distill_hook_count(
+        &self,
+        namespace_id: &str,
+        thread_id: &str,
+    ) -> anyhow::Result<()> {
+        let (_guard, conn) = self.write_connection().await?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO distill_state (namespace_id, thread_id, hook_count, updated_at, last_distilled_at)
+             VALUES (?, ?, 0, ?, ?)
+             ON CONFLICT(namespace_id, thread_id) DO UPDATE SET
+                hook_count = 0,
+                last_distilled_at = excluded.last_distilled_at,
+                updated_at = excluded.updated_at",
+            libsql::params![namespace_id, thread_id, now.clone(), now],
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_distill_hook_count(
+        &self,
+        namespace_id: &str,
+        thread_id: &str,
+    ) -> anyhow::Result<i64> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT hook_count FROM distill_state WHERE namespace_id = ? AND thread_id = ?",
+                libsql::params![namespace_id, thread_id],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(row.get(0)?),
+            None => Ok(0),
+        }
+    }
+
     pub async fn upsert_memory_item(
         &self,
         item: MemoryItemRecord,
@@ -199,7 +276,7 @@ impl Db {
         Ok(())
     }
 
-pub async fn recall_memory(
+    pub async fn recall_memory(
         &self,
         namespace_id: &str,
         query: &str,
@@ -341,7 +418,9 @@ pub fn build_memory_item(
         .and_then(Value::as_str)
         .map(|s| s.to_string());
     let chunk_id = Uuid::new_v4().to_string();
-    let embedding_json = embedding.as_ref().map(|vec| serde_json::to_string(vec).unwrap());
+    let embedding_json = embedding
+        .as_ref()
+        .map(|vec| serde_json::to_string(vec).unwrap());
     let item = MemoryItemRecord {
         id: id.clone(),
         namespace_id: namespace_id.to_string(),

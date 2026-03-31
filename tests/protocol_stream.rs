@@ -103,7 +103,9 @@ fn protocol_handles_new_requests_while_one_is_blocked() {
     let index_response = match seen_index {
         Some(value) => value,
         None => {
-            let stderr_output = stderr_rx.recv_timeout(Duration::from_secs(1)).unwrap_or_default();
+            let stderr_output = stderr_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap_or_default();
             let _ = child.kill();
             panic!(
                 "expected index response before release\nstderr:\n{}",

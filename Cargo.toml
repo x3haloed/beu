@@ -10,6 +10,7 @@ integration = []
 [dependencies]
 libsql = { version = "0.6", default-features = false, features = ["core"] }
 serde = { version = "1.0", features = ["derive"] }
+schemars = "1.0.4"
 serde_json = "1.0"
 uuid = { version = "1.8", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -20,7 +21,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 directories = "5.0"
-aisdk = { version = "0.5.2", features = ["openai", "openaicompatible", "google", "mistral", "openrouter"] }
+aisdk = { version = "0.5.2", features = ["full"] }
 
 [dev-dependencies]
 tempfile = "3"

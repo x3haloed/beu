@@ -77,9 +77,23 @@ print(json.dumps({{
         serde_json::json!([]),
         "namespace should start empty"
     );
-    assert!(payload["listed"]["entries"].as_array().map(|hits| hits.len()).unwrap_or(0) >= 1);
-    assert_eq!(payload["searched"]["entries"].as_array().map(|hits| hits.len()), Some(1));
-    assert_eq!(payload["searched"]["entries"][0]["source_type"], "user_turn");
+    assert!(
+        payload["listed"]["entries"]
+            .as_array()
+            .map(|hits| hits.len())
+            .unwrap_or(0)
+            >= 1
+    );
+    assert_eq!(
+        payload["searched"]["entries"]
+            .as_array()
+            .map(|hits| hits.len()),
+        Some(1)
+    );
+    assert_eq!(
+        payload["searched"]["entries"][0]["source_type"],
+        "user_turn"
+    );
     assert_eq!(
         payload["searched"]["entries"][0]["content"],
         "User prefers detailed explanations"

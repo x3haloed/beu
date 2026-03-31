@@ -55,7 +55,9 @@ async fn storage_recall_prefers_conceptual_match_over_lexical_noise() {
         10,
         None,
     );
-    db.upsert_memory_item(detailed_item, detailed_text).await.unwrap();
+    db.upsert_memory_item(detailed_item, detailed_text)
+        .await
+        .unwrap();
 
     let (short_item, short_text) = build_memory_item(
         namespace,

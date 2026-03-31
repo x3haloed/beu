@@ -57,8 +57,12 @@ async fn protocol_ledger_search_uses_native_vector_similarity() {
         Some(distractor_embedding),
     );
 
-    db.upsert_memory_item(target_item, target_text).await.unwrap();
-    db.upsert_memory_item(distractor_item, distractor_text).await.unwrap();
+    db.upsert_memory_item(target_item, target_text)
+        .await
+        .unwrap();
+    db.upsert_memory_item(distractor_item, distractor_text)
+        .await
+        .unwrap();
 
     let request = Request {
         version: "1.0.0".to_string(),

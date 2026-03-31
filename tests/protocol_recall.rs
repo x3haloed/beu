@@ -23,7 +23,10 @@ async fn protocol_recall_searches_indexed_memory() {
     };
 
     let index_response = Protocol::handle_request(index_request, &db).await;
-    assert!(matches!(index_response.status, beu::types::ResponseStatus::Ok { .. }));
+    assert!(matches!(
+        index_response.status,
+        beu::types::ResponseStatus::Ok { .. }
+    ));
 
     let recall_request = Request {
         version: "1.0.0".to_string(),

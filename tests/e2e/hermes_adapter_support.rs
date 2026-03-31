@@ -30,10 +30,16 @@ impl HermesHarness {
         fs::create_dir_all(&plugin_root).expect("plugin dir");
 
         let adapter_dir = hermes_adapter_dir();
-        fs::copy(adapter_dir.join("plugin.yaml"), plugin_root.join("plugin.yaml"))
-            .expect("copy plugin.yaml");
-        fs::copy(adapter_dir.join("__init__.py"), plugin_root.join("__init__.py"))
-            .expect("copy __init__.py");
+        fs::copy(
+            adapter_dir.join("plugin.yaml"),
+            plugin_root.join("plugin.yaml"),
+        )
+        .expect("copy plugin.yaml");
+        fs::copy(
+            adapter_dir.join("__init__.py"),
+            plugin_root.join("__init__.py"),
+        )
+        .expect("copy __init__.py");
 
         Self {
             install,

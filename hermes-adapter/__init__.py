@@ -197,6 +197,26 @@ class BeuProcess:
             logger.warning(f"Status check failed: {response.get('error')}")
             return {"storage": "error"}
 
+    def recall(
+        self,
+        query: str,
+        namespace: str = DEFAULT_NAMESPACE,
+        limit: int = 6,
+    ) -> dict:
+        """Search recalled turn content for prompt injection."""
+        payload = {
+            "query": query,
+            "limit": limit,
+        }
+
+        response = self.call("recall", payload, namespace)
+
+        if response.get("ok"):
+            return response.get("data", {})
+        else:
+            logger.warning(f"Recall failed: {response.get('error')}")
+            return {}
+
 
 def get_beu() -> BeuProcess:
     """Get or create the singleton BeU process instance."""
@@ -575,6 +595,13 @@ def pre_llm_call_hook(**kwargs) -> Optional[str]:
         )
 
     try:
+        query = str(user_message or kwargs.get("system_prompt") or "").strip()
+        if not query:
+            return None
+        result = get_beu().recall(query=query, namespace=namespace, limit=6)
+        block = result.get("ledger_recall_block")
+        if isinstance(block, str) and block.strip():
+            return block
         return None
 
     except Exception as e:

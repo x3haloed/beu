@@ -28,7 +28,10 @@ def _install_runtime_provider_module(*, requested_provider: str, runtime: dict):
 
 class TestBeUHookInvocation(unittest.TestCase):
     def test_llm_hooks_accept_hermes_keyword_invocation(self):
-        with patch.object(beu, "_index_entry") as index_entry:
+        with patch.object(beu, "_index_entry") as index_entry, patch.object(
+            beu, "get_beu"
+        ) as get_beu:
+            get_beu.return_value.recall.return_value = {}
             pre_result = beu.pre_llm_call_hook(
                 session_id="s1",
                 user_message="hello",
@@ -48,6 +51,7 @@ class TestBeUHookInvocation(unittest.TestCase):
         self.assertIsNone(pre_result)
         self.assertIsNone(post_result)
         self.assertEqual(index_entry.call_count, 2)
+        get_beu.return_value.recall.assert_called_once()
 
     def test_llm_hooks_ignore_empty_turns_without_error(self):
         with patch.object(beu, "_index_entry") as index_entry:
@@ -57,6 +61,61 @@ class TestBeUHookInvocation(unittest.TestCase):
         self.assertIsNone(pre_result)
         self.assertIsNone(post_result)
         index_entry.assert_not_called()
+
+    def test_pre_llm_injects_ledger_recall_block_when_hits_exist(self):
+        with TemporaryDirectory() as tmpdir:
+            state_dir = Path(tmpdir) / "state"
+            state_dir.mkdir(parents=True, exist_ok=True)
+            binary_path = Path(__file__).resolve().parents[2] / "target" / "debug" / "beu"
+            self.assertTrue(binary_path.exists(), f"missing built binary: {binary_path}")
+
+            with patch.object(beu.BeuProcess, "_instance", None), patch.dict(
+                os.environ,
+                {
+                    "BEU_BINARY_PATH": str(binary_path),
+                    "BEU_STATE_DIR": str(state_dir),
+                },
+                clear=False,
+            ), patch.object(beu, "_index_entry"):
+                beu.get_beu().call(
+                    "index",
+                    {
+                        "entries": [
+                            {
+                                "entry_id": "entry-1",
+                                "source_type": "user_turn",
+                                "source_id": "turn-1",
+                                "content": "User prefers detailed explanations",
+                                "metadata": {
+                                    "thread_id": "s1",
+                                    "turn_id": "turn-1",
+                                },
+                            }
+                        ]
+                    },
+                    namespace="s1",
+                )
+                recall = beu.get_beu().call(
+                    "recall",
+                    {"query": "detailed", "limit": 5},
+                    namespace="s1",
+                )
+                block = recall["data"]["ledger_recall_block"]
+                hook_result = beu.pre_llm_call_hook(
+                    session_id="s1",
+                    user_message="",
+                    system_prompt="detailed",
+                )
+                self.assertIsInstance(block, str)
+                self.assertEqual(recall["data"]["hits"][0]["citation"], "entry-1")
+                expected_block = (
+                    "<ledger_recall>\n"
+                    "Information from prior runtime history:\n"
+                    f"- [entry-1] User prefers detailed explanations ↳ For more, call: `{{ \"type\": \"function_call\", \"name\": \"ledger_get\", \"arguments\": \"{{\\\"namespace\\\":\\\"s1\\\",\\\"entry_id\\\":\\\"{recall['data']['hits'][0]['entry_id']}\\\"}}\" }}`\n"
+                    "</ledger_recall>"
+                )
+                self.assertEqual(block, expected_block)
+                self.assertEqual(hook_result, expected_block)
 
 
 class TestBeUEmbeddingResolution(unittest.TestCase):

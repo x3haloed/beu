@@ -112,6 +112,48 @@ fn default_limit() -> usize {
     5
 }
 
+fn build_ledger_recall_block(namespace: &str, hits: &[serde_json::Value]) -> Option<String> {
+    if hits.is_empty() {
+        return None;
+    }
+    let mut block =
+        String::from("<ledger_recall>\nInformation from prior runtime history:\n");
+    let mut wrote_any = false;
+    for hit in hits {
+        let citation = hit
+            .get("citation")
+            .and_then(Value::as_str)
+            .or_else(|| hit.get("entry_id").and_then(Value::as_str))
+            .or_else(|| hit.get("source_id").and_then(Value::as_str))
+            .unwrap_or("");
+        let entry_id = hit
+            .get("entry_id")
+            .and_then(Value::as_str)
+            .unwrap_or(citation);
+        let content = hit
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .replace('\n', " ")
+            .trim()
+            .to_string();
+        if content.is_empty() {
+            continue;
+        }
+        wrote_any = true;
+        block.push_str(&format!(
+            r#"- [{}] {} ↳ For more, call: `{{ "type": "function_call", "name": "ledger_get", "arguments": "{{\"namespace\":\"{}\",\"entry_id\":\"{}\"}}" }}`
+"#,
+            citation, content, namespace, entry_id
+        ));
+    }
+    if !wrote_any {
+        return None;
+    }
+    block.push_str("</ledger_recall>");
+    Some(block)
+}
+
 impl Protocol {
     pub fn run() -> Result<()> {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -319,18 +361,27 @@ impl Protocol {
             .recall_memory(&ns, &parsed.query, parsed.limit)
             .await
         {
-            Ok(hits) => Response::ok(
-                id,
-                serde_json::json!({
-                    "hits": hits.into_iter().map(|hit| serde_json::json!({
+            Ok(hits) => {
+                let hits_json = hits
+                    .into_iter()
+                    .map(|hit| serde_json::json!({
+                        "entry_id": hit.entry_id,
                         "source_type": hit.source_type,
                         "source_id": hit.source_id,
                         "content": hit.content,
                         "score": hit.score,
                         "citation": hit.citation,
-                    })).collect::<Vec<_>>()
-                }),
-            ),
+                    }))
+                    .collect::<Vec<_>>();
+                let ledger_recall_block = build_ledger_recall_block(&ns, &hits_json);
+                Response::ok(
+                    id,
+                    serde_json::json!({
+                        "hits": hits_json,
+                        "ledger_recall_block": ledger_recall_block,
+                    }),
+                )
+            }
             Err(e) => Response::err(
                 id,
                 format!("Storage error: {}", e),

@@ -241,6 +241,7 @@ pub async fn recall_memory(
         let mut candidates = Vec::new();
         while let Some(row) = rows.next().await? {
             candidates.push(RecallCandidate {
+                entry_id: row.get(0)?,
                 source_type: row.get(1)?,
                 source_id: row.get(3)?,
                 content: row.get(4)?,
@@ -292,6 +293,7 @@ pub struct MemoryItemTextRecord {
 
 #[derive(Debug, Clone)]
 pub struct MemoryRecallHit {
+    pub entry_id: String,
     pub source_type: String,
     pub source_id: String,
     pub content: String,
@@ -301,6 +303,7 @@ pub struct MemoryRecallHit {
 
 #[derive(Debug, Clone)]
 struct RecallCandidate {
+    entry_id: String,
     source_type: String,
     source_id: String,
     content: String,
@@ -483,6 +486,7 @@ fn rerank_candidates(
         .into_iter()
         .take(limit)
         .map(|candidate| MemoryRecallHit {
+            entry_id: candidate.entry_id,
             source_type: candidate.source_type,
             source_id: candidate.source_id,
             content: candidate.content,

@@ -44,8 +44,26 @@ async fn protocol_recall_searches_indexed_memory() {
 
     let hits = data["hits"].as_array().unwrap();
     assert_eq!(hits.len(), 1);
+    let entry_id = hits[0]["entry_id"].as_str().unwrap();
     assert_eq!(hits[0]["source_type"], "user_turn");
     assert_eq!(hits[0]["source_id"], "turn-1");
+    assert_eq!(hits[0]["citation"], "entry-1");
+    assert!(data["ledger_recall_block"]
+        .as_str()
+        .unwrap()
+        .contains(r#""type": "function_call""#));
+    assert!(data["ledger_recall_block"]
+        .as_str()
+        .unwrap()
+        .contains(r#""name": "ledger_get""#));
+    assert!(data["ledger_recall_block"]
+        .as_str()
+        .unwrap()
+        .contains(entry_id));
+    assert!(data["ledger_recall_block"]
+        .as_str()
+        .unwrap()
+        .contains("namespace"));
 }
 
 #[tokio::test]
@@ -111,6 +129,7 @@ async fn protocol_recall_honors_namespace_and_source_filters() {
     assert_eq!(default_hits.len(), 1);
     assert_eq!(default_hits[0]["source_type"], "user_turn");
     assert_eq!(default_hits[0]["source_id"], "turn-default");
+    assert!(default_data["ledger_recall_block"].is_string());
 
     let agent_recall = Request {
         version: "1.0.0".to_string(),
@@ -131,4 +150,5 @@ async fn protocol_recall_honors_namespace_and_source_filters() {
     assert_eq!(agent_hits.len(), 1);
     assert_eq!(agent_hits[0]["source_type"], "assistant_turn");
     assert_eq!(agent_hits[0]["source_id"], "turn-agent");
+    assert!(agent_data["ledger_recall_block"].is_string());
 }

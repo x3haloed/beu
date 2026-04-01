@@ -192,6 +192,14 @@ pub(super) fn build_ledger_recall_block(
     Some(block)
 }
 
+pub(super) fn build_wake_pack_block(wake_pack: &str) -> Option<String> {
+    let content = wake_pack.trim();
+    if content.is_empty() {
+        return None;
+    }
+    Some(format!("\n<wake_pack>\n{}\n</wake_pack>", content))
+}
+
 pub(super) async fn embed_entries(
     provider: Option<&EmbeddingProviderPayload>,
     entries: &[IndexEntryPayload],

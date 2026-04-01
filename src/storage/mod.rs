@@ -105,6 +105,36 @@ impl Db {
         }
     }
 
+    pub async fn latest_wake_pack_content(
+        &self,
+        namespace_id: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT payload_json
+                 FROM ledger_entries
+                 WHERE namespace_id = ? AND entry_type = 'wake_pack' AND deleted_at IS NULL
+                 ORDER BY updated_at DESC
+                 LIMIT 1",
+                libsql::params![namespace_id],
+            )
+            .await?;
+        let Some(row) = rows.next().await? else {
+            return Ok(None);
+        };
+        let payload_json: String = row.get(0)?;
+        let payload: Value = serde_json::from_str(&payload_json)?;
+        let content = payload
+            .get("wake_pack")
+            .and_then(|wake_pack| wake_pack.get("content"))
+            .or_else(|| payload.get("content"))
+            .and_then(Value::as_str)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        Ok(content)
+    }
+
     pub async fn note_distill_hook(
         &self,
         namespace_id: &str,

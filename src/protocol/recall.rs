@@ -33,7 +33,18 @@ impl Protocol {
                         })
                     })
                     .collect::<Vec<_>>();
-                let ledger_recall_block = build_ledger_recall_block(&ns, &hits_json);
+                let mut ledger_recall_block = build_ledger_recall_block(&ns, &hits_json);
+                if let Ok(Some(wake_pack_content)) = db.latest_wake_pack_content(&ns).await {
+                    if let Some(wake_pack_block) = build_wake_pack_block(&wake_pack_content) {
+                        ledger_recall_block = match ledger_recall_block {
+                            Some(mut existing_block) => {
+                                existing_block.push_str(&wake_pack_block);
+                                Some(existing_block)
+                            }
+                            None => Some(wake_pack_block),
+                        };
+                    }
+                }
                 Response::ok(
                     id,
                     serde_json::json!({

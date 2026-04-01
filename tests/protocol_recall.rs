@@ -1,5 +1,5 @@
 use beu::protocol::Protocol;
-use beu::storage::Db;
+use beu::storage::{build_memory_item, Db};
 use beu::types::Request;
 
 #[tokio::test]
@@ -67,6 +67,53 @@ async fn protocol_recall_searches_indexed_memory() {
         .as_str()
         .unwrap()
         .contains("namespace"));
+}
+
+#[tokio::test]
+async fn protocol_recall_includes_wake_pack_even_without_hits() {
+    let db = Db::open_in_memory().await.unwrap();
+
+    let (item, text) = build_memory_item(
+        "agent-123",
+        "wake_pack",
+        "distill",
+        "distill-1",
+        Some("Distilled memory".to_string()),
+        Some("Latest wake pack".to_string()),
+        Some("distill-1".to_string()),
+        serde_json::json!({
+            "wake_pack": {
+                "content": "Wake pack should now appear even when recall has no hits.",
+                "summary": "wake pack fallback"
+            },
+            "metadata": { "thread_id": "thread-1", "turn_id": "turn-1" }
+        }),
+        10,
+        None,
+    );
+    db.upsert_memory_item(item, text).await.unwrap();
+
+    let recall_request = Request {
+        version: "1.0.0".to_string(),
+        command: "recall".to_string(),
+        id: "rec-wake-pack".to_string(),
+        namespace: Some("agent-123".to_string()),
+        payload: serde_json::json!({
+            "query": "no-such-match",
+            "limit": 5
+        }),
+    };
+
+    let recall_response = Protocol::handle_request(recall_request, &db).await;
+    let data = match recall_response.status {
+        beu::types::ResponseStatus::Ok { data, .. } => data,
+        other => panic!("expected ok response, got {other:?}"),
+    };
+
+    assert_eq!(data["hits"].as_array().unwrap().len(), 0);
+    let block = data["ledger_recall_block"].as_str().unwrap();
+    assert!(block.contains("<wake_pack>"));
+    assert!(block.contains("Wake pack should now appear even when recall has no hits."));
 }
 
 #[tokio::test]

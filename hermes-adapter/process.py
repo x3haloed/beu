@@ -56,11 +56,25 @@ class BeuProcess:
             "payload": payload,
         }
         try:
+            env = os.environ.copy()
+            if "BEU_LOG_LEVEL" not in env:
+                hermes_log_level = env.get("HERMES_LOG_LEVEL")
+                if hermes_log_level:
+                    env["BEU_LOG_LEVEL"] = hermes_log_level
+            if "BEU_LOG_FORMAT" not in env:
+                hermes_log_format = env.get("HERMES_LOG_FORMAT")
+                if hermes_log_format:
+                    env["BEU_LOG_FORMAT"] = hermes_log_format
+            if "BEU_TRACE_PAYLOADS" not in env:
+                hermes_trace_payloads = env.get("HERMES_TRACE_PAYLOADS")
+                if hermes_trace_payloads:
+                    env["BEU_TRACE_PAYLOADS"] = hermes_trace_payloads
             proc = subprocess.run(
                 [self.binary_path],
                 input=json.dumps(request) + "\n",
                 capture_output=True,
                 text=True,
+                env=env,
                 timeout=30,
                 check=False,
             )

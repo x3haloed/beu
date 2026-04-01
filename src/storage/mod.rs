@@ -9,6 +9,8 @@ use tokio::sync::Mutex;
 use tracing::{debug, error};
 use uuid::Uuid;
 
+use crate::observability::{emit, TraceEvent};
+
 pub struct Db {
     database: Database,
     write_lock: Mutex<()>,
@@ -18,6 +20,10 @@ impl Db {
     pub async fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let path_str = path.as_ref().to_string_lossy().to_string();
         debug!(path = %path_str, "Opening database");
+        emit(TraceEvent::StorageOpened {
+            path: path_str.clone(),
+            in_memory: false,
+        });
         if let Some(parent) = path.as_ref().parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -34,6 +40,10 @@ impl Db {
     pub async fn open_in_memory() -> anyhow::Result<Self> {
         let path = std::env::temp_dir().join(format!("beu-memory-{}.sqlite", Uuid::new_v4()));
         debug!(path = %path.display(), "Opening temporary database");
+        emit(TraceEvent::StorageOpened {
+            path: path.display().to_string(),
+            in_memory: true,
+        });
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -73,6 +83,7 @@ impl Db {
             error!(error = %e, "Failed to run migrations");
             return Err(e);
         }
+        emit(TraceEvent::StorageInitialized);
         Ok(())
     }
 
@@ -176,6 +187,20 @@ impl Db {
         item: MemoryItemRecord,
         text: MemoryItemTextRecord,
     ) -> anyhow::Result<()> {
+        let entry_id = item.id.clone();
+        emit(TraceEvent::StorageUpsertStarted {
+            entry_id: entry_id.clone(),
+            namespace_id: item.namespace_id.clone(),
+            entry_type: item.entry_type.clone(),
+            source_type: item.source_type.clone(),
+        });
+        debug!(
+            entry_id = %entry_id,
+            namespace_id = %item.namespace_id,
+            entry_type = %item.entry_type,
+            source_type = %item.source_type,
+            "Upserting memory item"
+        );
         let (_guard, conn) = self.write_connection().await?;
         conn.execute(
             "INSERT INTO ledger_entries (id, namespace_id, entry_type, source_type, source_id, thread_id, turn_id, title, summary, citation, payload_json, importance, created_at, updated_at, deleted_at)
@@ -213,6 +238,8 @@ impl Db {
             ],
         )
         .await?;
+        emit(TraceEvent::StorageUpsertCompleted { entry_id: entry_id.clone() });
+        debug!(entry_id = %entry_id, "Memory item upserted");
 
         conn.execute(
             "INSERT INTO ledger_entry_chunks (chunk_id, namespace_id, entry_id, chunk_index, content, content_norm, search_hints_json, created_at, updated_at)

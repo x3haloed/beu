@@ -8,7 +8,9 @@ All communication is JSON over STDIO. The host sends a request, BeU responds, an
 
 - **Input**: Read newline-delimited JSON from stdin until EOF
 - **Output**: Write JSON to stdout
-- **Errors**: Write to stderr, non-zero exit code
+- **Errors and diagnostics**: Write to stderr, non-zero exit code for process failure
+
+Stderr may include structured tracing output when the host enables it. Hermes/OpenClaw adapters may map their own host-level logging env vars onto `BEU_*` before launch. Stdout remains reserved for protocol responses only.
 
 ## Request Format
 

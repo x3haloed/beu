@@ -24,6 +24,18 @@ cargo build --release
 echo '{"version":"1.0.0","command":"identity","id":"1","payload":{"namespace":"default","query":"all"}}' | ./target/release/beu
 ```
 
+## Logging
+
+BeU writes protocol responses to stdout and diagnostics to stderr.
+
+- Hermes/OpenClaw adapters treat `HERMES_LOG_LEVEL`, `HERMES_LOG_FORMAT`, and `HERMES_TRACE_PAYLOADS` as the host-level knobs and map them onto `BEU_*` when present.
+- Direct `BEU_*` variables still override that mapping if a developer wants to force BeU-specific behavior.
+- `BEU_LOG_LEVEL=warn|info|debug|trace` controls tracing verbosity
+- `BEU_LOG_FORMAT=human|json` controls stderr formatting
+- `BEU_TRACE_PAYLOADS=1` enables payload logging for deep debugging
+
+Hermes and OpenClaw adapters can pass these environment variables through so hosts can opt into richer logs without changing the protocol surface.
+
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for system design.

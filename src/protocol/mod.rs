@@ -2,6 +2,7 @@ use crate::storage::{
     build_fts_query, build_memory_item, default_db_path, expand_query_terms, normalize_text,
     tokenize_terms, Db,
 };
+use crate::observability::{emit, trace_payloads_enabled, TraceEvent};
 use crate::types::{Command, ErrorCode, Request, Response};
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -89,14 +90,36 @@ impl Protocol {
         let mut tasks = Vec::new();
 
         while let Some(request_text) = request_rx.recv().await {
-            debug!(input = %request_text, "Received request");
-
             let response_tx = response_tx.clone();
             let db = db.clone();
             tasks.push(tokio::spawn(async move {
-                let response = match serde_json::from_str::<Request>(&request_text) {
-                    Ok(request) => Self::handle_request(request, &db).await,
+                let parsed_request = serde_json::from_str::<Request>(&request_text);
+                let response = match parsed_request {
+                    Ok(request) => {
+                        let namespace = request
+                            .namespace
+                            .clone()
+                            .unwrap_or_else(|| "default".to_string());
+                        emit(TraceEvent::ProtocolRequestReceived {
+                            request_id: request.id.clone(),
+                            command: request.command.clone(),
+                            namespace: namespace.clone(),
+                            bytes: request_text.len(),
+                        });
+                        emit(TraceEvent::ProtocolRequestParsed {
+                            request_id: request.id.clone(),
+                            command: request.command.clone(),
+                            namespace,
+                        });
+                        Self::handle_request(request, &db).await
+                    }
                     Err(e) => {
+                        emit(TraceEvent::ProtocolRequestFailed {
+                            request_id: String::new(),
+                            command: String::new(),
+                            namespace: String::from("default"),
+                            error: e.to_string(),
+                        });
                         error!(error = %e, "Failed to parse request");
                         Response::err(
                             String::new(),
@@ -108,6 +131,11 @@ impl Protocol {
 
                 match serde_json::to_string(&response) {
                     Ok(output) => {
+                        emit(TraceEvent::ProtocolResponseSent {
+                            request_id: response.id.clone(),
+                            ok: matches!(response.status, crate::types::ResponseStatus::Ok { .. }),
+                            bytes: output.len(),
+                        });
                         let _ = response_tx.send(output);
                     }
                     Err(e) => {
@@ -144,7 +172,13 @@ impl Protocol {
             .clone()
             .unwrap_or_else(|| "default".to_string());
 
-        debug!(command = %request.command, namespace = %namespace, id = %request.id, "Handling command");
+        debug!(
+            command = %request.command,
+            namespace = %namespace,
+            id = %request.id,
+            payload = if trace_payloads_enabled() { request.payload.to_string() } else { "<redacted>".to_string() },
+            "Handling command"
+        );
 
         match command {
             Command::Distill => {

@@ -3,6 +3,9 @@ use aisdk::core::DynamicModel;
 use aisdk::core::LanguageModelRequest;
 use aisdk::providers::{AmazonBedrock, Google, Groq, OpenAI, OpenAICompatible, TogetherAI, XAI};
 use anyhow::{Context, Result};
+use std::time::Instant;
+
+use crate::observability::{emit, TraceEvent};
 
 impl Protocol {
     fn build_distill_model(
@@ -131,9 +134,86 @@ impl Protocol {
             "prior_wake_pack": prior_wake_pack,
             "active_invariants": active_invariants,
         });
+        let prompt_text = prompt.to_string();
         let system = "You are BeU's compressor model. Return only JSON that matches the requested schema. Keep claims invariant-style, not policy and not narration.";
-        match Self::distill_provider_branch(provider) {
-            Some("openai") => {
+        let branch = Self::distill_provider_branch(provider).unwrap_or("unsupported");
+        let request_id = format!("distill-{}", uuid::Uuid::new_v4());
+        let prompt_chars = prompt_text.chars().count() + system.chars().count();
+
+        emit(TraceEvent::ProviderBranchSelected {
+            kind: "llm".to_string(),
+            provider: provider.to_string(),
+            branch: branch.to_string(),
+            model: model_name.to_string(),
+            base_url_present: base_url.is_some(),
+            api_key_present: !api_key.trim().is_empty(),
+        });
+
+        macro_rules! run_branch {
+            ($branch_name:expr, $model:expr) => {{
+                let started = Instant::now();
+                emit(TraceEvent::ProviderCallStarted {
+                    kind: "llm".to_string(),
+                    provider: provider.to_string(),
+                    branch: $branch_name.to_string(),
+                    model: model_name.to_string(),
+                    request_id: request_id.clone(),
+                    input_items: thread_history.len(),
+                    prompt_chars,
+                    base_url_present: base_url.is_some(),
+                    api_key_present: !api_key.trim().is_empty(),
+                });
+                let response = LanguageModelRequest::builder()
+                    .model($model)
+                    .system(system)
+                    .prompt(prompt_text.clone())
+                    .schema::<DistillOutput>()
+                    .build()
+                    .generate_text()
+                    .await
+                    .map_err(|e| {
+                        emit(TraceEvent::ProviderCallFailed {
+                            kind: "llm".to_string(),
+                            provider: provider.to_string(),
+                            branch: $branch_name.to_string(),
+                            model: model_name.to_string(),
+                            request_id: request_id.clone(),
+                            stage: "request".to_string(),
+                            error: e.to_string(),
+                            elapsed_ms: started.elapsed().as_millis(),
+                        });
+                        anyhow::anyhow!(e).context("distill generation failed")
+                    })?;
+                let parsed = response.into_schema::<DistillOutput>().map_err(|e| {
+                    emit(TraceEvent::ProviderCallFailed {
+                        kind: "llm".to_string(),
+                        provider: provider.to_string(),
+                        branch: $branch_name.to_string(),
+                        model: model_name.to_string(),
+                        request_id: request_id.clone(),
+                        stage: "parse".to_string(),
+                        error: e.to_string(),
+                        elapsed_ms: started.elapsed().as_millis(),
+                    });
+                    anyhow::anyhow!(e).context("failed to parse distill output")
+                })?;
+                emit(TraceEvent::ProviderCallSucceeded {
+                    kind: "llm".to_string(),
+                    provider: provider.to_string(),
+                    branch: $branch_name.to_string(),
+                    model: model_name.to_string(),
+                    request_id: request_id.clone(),
+                    elapsed_ms: started.elapsed().as_millis(),
+                    output_chars: serde_json::to_string(&parsed)
+                        .map(|s| s.chars().count())
+                        .unwrap_or(0),
+                });
+                Ok(parsed)
+            }};
+        }
+
+        match branch {
+            "openai" => {
                 let mut builder = OpenAI::<DynamicModel>::builder()
                     .provider_name("openai")
                     .model_name(model_name.to_string())
@@ -141,21 +221,9 @@ impl Protocol {
                 if let Some(url) = base_url {
                     builder = builder.base_url(url.to_string());
                 }
-                let model = builder.build().map_err(|e| anyhow::anyhow!(e))?;
-                let response = LanguageModelRequest::builder()
-                    .model(model)
-                    .system(system)
-                    .prompt(prompt.to_string())
-                    .schema::<DistillOutput>()
-                    .build()
-                    .generate_text()
-                    .await
-                    .context("distill generation failed")?;
-                response
-                    .into_schema::<DistillOutput>()
-                    .context("failed to parse distill output")
+                run_branch!("openai", builder.build().map_err(|e| anyhow::anyhow!(e))?)
             }
-            Some("google") => {
+            "google" => {
                 let mut builder = Google::<DynamicModel>::builder()
                     .provider_name("google")
                     .model_name(model_name.to_string())
@@ -163,21 +231,9 @@ impl Protocol {
                 if let Some(url) = base_url {
                     builder = builder.base_url(url.to_string());
                 }
-                let model = builder.build().map_err(|e| anyhow::anyhow!(e))?;
-                let response = LanguageModelRequest::builder()
-                    .model(model)
-                    .system(system)
-                    .prompt(prompt.to_string())
-                    .schema::<DistillOutput>()
-                    .build()
-                    .generate_text()
-                    .await
-                    .context("distill generation failed")?;
-                response
-                    .into_schema::<DistillOutput>()
-                    .context("failed to parse distill output")
+                run_branch!("google", builder.build().map_err(|e| anyhow::anyhow!(e))?)
             }
-            Some("openai_compatible") => {
+            "openai_compatible" => {
                 let mut builder = OpenAICompatible::<DynamicModel>::builder()
                     .provider_name(provider.to_string())
                     .model_name(model_name.to_string())
@@ -185,21 +241,12 @@ impl Protocol {
                 if let Some(url) = base_url {
                     builder = builder.base_url(url.to_string());
                 }
-                let model = builder.build().map_err(|e| anyhow::anyhow!(e))?;
-                let response = LanguageModelRequest::builder()
-                    .model(model)
-                    .system(system)
-                    .prompt(prompt.to_string())
-                    .schema::<DistillOutput>()
-                    .build()
-                    .generate_text()
-                    .await
-                    .context("distill generation failed")?;
-                response
-                    .into_schema::<DistillOutput>()
-                    .context("failed to parse distill output")
+                run_branch!(
+                    "openai_compatible",
+                    builder.build().map_err(|e| anyhow::anyhow!(e))?
+                )
             }
-            Some("groq") => {
+            "groq" => {
                 let mut builder = Groq::<DynamicModel>::builder()
                     .provider_name("groq")
                     .model_name(model_name.to_string())
@@ -207,21 +254,9 @@ impl Protocol {
                 if let Some(url) = base_url {
                     builder = builder.base_url(url.to_string());
                 }
-                let model = builder.build().map_err(|e| anyhow::anyhow!(e))?;
-                let response = LanguageModelRequest::builder()
-                    .model(model)
-                    .system(system)
-                    .prompt(prompt.to_string())
-                    .schema::<DistillOutput>()
-                    .build()
-                    .generate_text()
-                    .await
-                    .context("distill generation failed")?;
-                response
-                    .into_schema::<DistillOutput>()
-                    .context("failed to parse distill output")
+                run_branch!("groq", builder.build().map_err(|e| anyhow::anyhow!(e))?)
             }
-            Some("amazon_bedrock") => {
+            "amazon_bedrock" => {
                 let mut builder = AmazonBedrock::<DynamicModel>::builder()
                     .provider_name("amazon_bedrock")
                     .model_name(model_name.to_string())
@@ -229,21 +264,12 @@ impl Protocol {
                 if let Some(url) = base_url {
                     builder = builder.base_url(url.to_string());
                 }
-                let model = builder.build().map_err(|e| anyhow::anyhow!(e))?;
-                let response = LanguageModelRequest::builder()
-                    .model(model)
-                    .system(system)
-                    .prompt(prompt.to_string())
-                    .schema::<DistillOutput>()
-                    .build()
-                    .generate_text()
-                    .await
-                    .context("distill generation failed")?;
-                response
-                    .into_schema::<DistillOutput>()
-                    .context("failed to parse distill output")
+                run_branch!(
+                    "amazon_bedrock",
+                    builder.build().map_err(|e| anyhow::anyhow!(e))?
+                )
             }
-            Some("togetherai") => {
+            "togetherai" => {
                 let mut builder = TogetherAI::<DynamicModel>::builder()
                     .provider_name("togetherai")
                     .model_name(model_name.to_string())
@@ -251,21 +277,9 @@ impl Protocol {
                 if let Some(url) = base_url {
                     builder = builder.base_url(url.to_string());
                 }
-                let model = builder.build().map_err(|e| anyhow::anyhow!(e))?;
-                let response = LanguageModelRequest::builder()
-                    .model(model)
-                    .system(system)
-                    .prompt(prompt.to_string())
-                    .schema::<DistillOutput>()
-                    .build()
-                    .generate_text()
-                    .await
-                    .context("distill generation failed")?;
-                response
-                    .into_schema::<DistillOutput>()
-                    .context("failed to parse distill output")
+                run_branch!("togetherai", builder.build().map_err(|e| anyhow::anyhow!(e))?)
             }
-            Some("xai") => {
+            "xai" => {
                 let mut builder = XAI::<DynamicModel>::builder()
                     .provider_name("xai")
                     .model_name(model_name.to_string())
@@ -273,24 +287,21 @@ impl Protocol {
                 if let Some(url) = base_url {
                     builder = builder.base_url(url.to_string());
                 }
-                let model = builder.build().map_err(|e| anyhow::anyhow!(e))?;
-                let response = LanguageModelRequest::builder()
-                    .model(model)
-                    .system(system)
-                    .prompt(prompt.to_string())
-                    .schema::<DistillOutput>()
-                    .build()
-                    .generate_text()
-                    .await
-                    .context("distill generation failed")?;
-                response
-                    .into_schema::<DistillOutput>()
-                    .context("failed to parse distill output")
+                run_branch!("xai", builder.build().map_err(|e| anyhow::anyhow!(e))?)
             }
-            _ => Err(anyhow::anyhow!(
-                "unsupported distill provider: {}",
-                provider
-            )),
+            _ => {
+                emit(TraceEvent::ProviderCallFailed {
+                    kind: "llm".to_string(),
+                    provider: provider.to_string(),
+                    branch: branch.to_string(),
+                    model: model_name.to_string(),
+                    request_id,
+                    stage: "branch".to_string(),
+                    error: format!("unsupported distill provider: {provider}"),
+                    elapsed_ms: 0,
+                });
+                Err(anyhow::anyhow!("unsupported distill provider: {}", provider))
+            }
         }
     }
 

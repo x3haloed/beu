@@ -24,6 +24,8 @@ fn protocol_handles_new_requests_while_one_is_blocked() {
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_beu"))
         .env("BEU_STATE_DIR", &db_dir)
+        .env("BEU_LOG_LEVEL", "info")
+        .env("BEU_LOG_FORMAT", "human")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -154,7 +156,13 @@ fn protocol_handles_new_requests_while_one_is_blocked() {
     assert!(status.success(), "beu exited unsuccessfully");
 
     let _ = stderr_handle.join();
-    let _ = stderr_rx.recv_timeout(Duration::from_secs(1));
+    let stderr_output = stderr_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap_or_default();
+    assert!(
+        stderr_output.contains("protocol_request_received"),
+        "expected structured protocol event in stderr"
+    );
 }
 
 #[test]
@@ -165,6 +173,8 @@ fn protocol_handles_index_while_a_request_is_blocked() {
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_beu"))
         .env("BEU_STATE_DIR", &db_dir)
+        .env("BEU_LOG_LEVEL", "info")
+        .env("BEU_LOG_FORMAT", "human")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

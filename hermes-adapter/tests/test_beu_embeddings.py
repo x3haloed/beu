@@ -26,6 +26,14 @@ def _install_runtime_provider_module(*, requested_provider: str, runtime: dict):
     return {"hermes_cli": pkg, "hermes_cli.runtime_provider": runtime_mod}
 
 
+def _install_hermes_config_module(*, config: dict):
+    pkg = types.ModuleType("hermes_cli")
+    pkg.__path__ = []  # type: ignore[attr-defined]
+    config_mod = types.ModuleType("hermes_cli.config")
+    config_mod.load_config = lambda: config
+    return {"hermes_cli": pkg, "hermes_cli.config": config_mod}
+
+
 class TestBeUHookInvocation(unittest.TestCase):
     def test_llm_hooks_accept_hermes_keyword_invocation(self):
         with patch.object(beu, "_index_entry") as index_entry, patch.object(
@@ -119,6 +127,49 @@ class TestBeUHookInvocation(unittest.TestCase):
 
 
 class TestBeUEmbeddingResolution(unittest.TestCase):
+    def test_named_distill_block_takes_priority_over_model(self):
+        with TemporaryDirectory() as tmpdir:
+            cfg_path = Path(tmpdir) / "beu.yaml"
+            cfg_path.write_text(
+                """distill:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4
+model:
+  provider: anthropic
+  model: claude-3-5-sonnet-latest
+""",
+                encoding="utf-8",
+            )
+
+            modules = _install_runtime_provider_module(
+                requested_provider="openai-codex",
+                runtime={"provider": "openrouter", "model": "should-not-be-used"},
+            )
+            modules.update(
+                _install_hermes_config_module(
+                    config={
+                        "distill": {
+                            "provider": "openrouter",
+                            "model": "anthropic/claude-sonnet-4",
+                        },
+                        "model": {
+                            "provider": "anthropic",
+                            "model": "claude-3-5-sonnet-latest",
+                        },
+                    }
+                )
+            )
+            with patch.dict(sys.modules, modules), patch.dict(
+                os.environ, {"BEU_CONFIG_PATH": str(cfg_path)}, clear=False
+            ):
+                result = beu._candidate_distill_payloads()
+
+        self.assertGreaterEqual(len(result), 1)
+        self.assertEqual(
+            result[0],
+            {"provider": "openai_compatible", "model": "anthropic/claude-sonnet-4"},
+        )
+
     def test_beu_local_embeddings_config_wins(self):
         with TemporaryDirectory() as tmpdir:
             cfg_path = Path(tmpdir) / "beu.yaml"

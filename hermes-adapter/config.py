@@ -171,6 +171,11 @@ def _candidate_distill_payloads() -> list[dict[str, Any]]:
         logger.warning("Failed to load Hermes config for distill: %s", exc)
         return []
     candidates: list[dict[str, Any]] = []
+    distill_cfg = config.get("distill")
+    if isinstance(distill_cfg, dict):
+        payload = _provider_payload_from_config_entry(distill_cfg)
+        if payload:
+            candidates.append(payload)
     model_cfg = config.get("model")
     if isinstance(model_cfg, dict):
         payload = _provider_payload_from_config_entry(model_cfg)

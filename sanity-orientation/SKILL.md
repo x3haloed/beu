@@ -15,6 +15,14 @@ This first primitive answers only one question:
 
 **What agent harness is this?**
 
+## Important Distinctions
+
+- `harness_id` is not the same as `host_editor`.
+- Provider/model metadata is not harness identity. A session can say `Provider: openai-codex` while the actual harness is Hermes chat or another wrapper.
+- `TERM_PROGRAM=vscode` can identify the editor family, but it does not prove Copilot vs Cursor vs another harness.
+- Repo bootstrap files are supporting evidence, not proof by themselves. Their presence only matters when they match the repo's expected harness surface.
+- Home-directory traces are weak because multiple harnesses can coexist on one machine.
+
 ## When to Use
 
 Use this skill when:
@@ -33,11 +41,11 @@ Always resolve in this order:
 
 1. Direct self-identification from the current instructions or session metadata
 2. Tooling surface unique to the host or editor integration
-3. Repo bootstrap files and harness-specific instruction surfaces
+3. Repo bootstrap files and harness-specific instruction surfaces (supporting evidence only)
 4. Environment variables and process context
 5. User-home directories or local installation traces
 
-Start at the top and stop as soon as you have a high-confidence answer.
+Start at the top and stop as soon as you have a high-confidence answer. If higher-priority evidence conflicts with lower-priority evidence, report `ambiguous` rather than forcing a guess. If you exhaust the sequence without enough evidence, return `unknown` with the strongest facts you found.
 
 ## Confidence Rules
 
@@ -60,7 +68,7 @@ Decision rules:
 Return the result in a compact structure the agent can reuse:
 
 ```text
-harness_id: github-copilot | claude-code | cursor | codex | unknown | ambiguous
+harness_id: hermes | github-copilot | claude-code | cursor | codex | unknown | ambiguous
 host_editor: vscode | terminal | unknown
 confidence: high | medium | low
 evidence:
@@ -77,6 +85,7 @@ notes: <ambiguity, caveat, or next probe>
 Look for statements in the active instructions or session metadata that directly name the harness.
 
 Examples:
+- `hermes chat`
 - "Your name is GitHub Copilot"
 - "Use Skills in Claude Code"
 - "Codex"
@@ -88,6 +97,7 @@ If present, treat that as the primary signal.
 Look at the tools the harness exposes.
 
 Examples:
+- A `hermes` CLI process or `hermes chat` launch line points to the Hermes harness.
 - VS Code-specific tools such as `run_vscode_command`, `get_vscode_api`, `vscode_askQuestions`, notebook editing, or editor-bound browser controls imply a VS Code host family.
 - A Codex-specific environment variable or CLI contract can point toward Codex when explicit naming is absent.
 
@@ -96,6 +106,7 @@ Tool surface is stronger than file presence because it reflects the live runtime
 ### 3. Check the bootstrap surface the repo expects
 
 Known defaults in this repo:
+- Hermes chat / API-hosted sessions: active developer instructions plus the live Hermes tool surface
 - GitHub Copilot: `.github/copilot-instructions.md`
 - Claude Code: `CLAUDE.md`
 - Cursor: `.cursorrules`
@@ -127,12 +138,13 @@ They often coexist. Their presence means "installed sometime" not "currently run
 
 | Signal | Weight | Meaning |
 |-------|--------|---------|
+| `hermes chat` launch line or Hermes-native tool surface | High | Hermes harness |
 | Instructions explicitly name harness | High | Usually decisive |
 | Live tool inventory matches a host family | High | Strong runtime evidence |
 | Repo bootstrap file matches harness convention | Medium | Good supporting evidence |
 | `TERM_PROGRAM=vscode` | Medium | VS Code host only |
 | `CODEX_CI=1` or similar harness env | Medium | Useful when explicit |
-| `~/.copilot`, `~/.claude`, `~/.cursor` | Low | Never decisive |
+| `~/.copilot`, `~/.claude`, `~/.cursor`, `~/.agents`, `~/.hermes` | Low | Never decisive |
 
 ## Known Bootstrap Targets
 

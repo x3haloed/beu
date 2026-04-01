@@ -29,6 +29,8 @@ Decision rules:
 - Low-confidence signals never decide the harness on their own.
 - Conflicting signals at comparable weight should return `ambiguous`.
 - Explicit self-identification overrides weaker signals unless another equally explicit signal disagrees.
+- Bootstrap files can support the result, but they never outrank the live session.
+- If you only know the editor family, stop at `host_editor` and do not infer `harness_id` from it.
 
 ## Important Distinctions
 
@@ -43,6 +45,7 @@ Decision rules:
 ### Bootstrap files are supporting evidence, not proof
 
 A repo can contain multiple harness-related files over time. Presence alone does not prove the active harness unless it matches the repo's expected bootstrap surface.
+If the live runtime contradicts the repo file, trust the runtime and note the conflict.
 
 ### Installation traces are not runtime identity
 
@@ -63,7 +66,7 @@ This proves only that those tools have been used or installed before.
 
 Logs, transcripts, and coordination notes can mention other agents or harnesses. Those artifacts are context, not proof of the current session's harness. Resolve identity from the current runtime first.
 
-## Verified Example: Current Session
+## Verified Example Pattern
 
 Observed facts:
 - The active instructions identify the agent as GitHub Copilot.
@@ -125,6 +128,13 @@ conflicts:
 notes: do not guess; gather another runtime-specific probe
 ```
 
+## Common Failure Modes
+
+- Treating `AGENTS.md` or `.github/copilot-instructions.md` as automatic proof instead of support
+- Filling in `harness_id` when only `TERM_PROGRAM=vscode` is known
+- Overwriting explicit session identity with a weaker bootstrap convention
+- Ignoring conflict notes when the evidence split is real
+
 ## Minimum Reliable Algorithm
 
 1. Check the active instructions for explicit harness naming.
@@ -133,3 +143,4 @@ notes: do not guess; gather another runtime-specific probe
 4. Use environment variables to resolve editor host, not to overclaim harness identity.
 5. Ignore home-directory traces unless all stronger signals are missing.
 6. If two comparable stronger signals disagree, return `ambiguous`.
+7. When in doubt, prefer a shorter truthful answer over a guessed complete one.

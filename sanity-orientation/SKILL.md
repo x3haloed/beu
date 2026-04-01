@@ -25,6 +25,8 @@ This skill is about runtime identity, not repo preference. A machine can contain
 - Repo bootstrap files are supporting evidence, not proof by themselves. Their presence only matters when they match the repo's expected harness surface.
 - Home-directory traces are weak because multiple harnesses can coexist on one machine.
 - Coordination between multiple agents does not merge identities. Each agent must resolve its own harness from its own live session evidence.
+- A bootstrap file can inform the expected surface, but the live session always wins when they disagree.
+- If the evidence only identifies the editor host, report the editor host and keep `harness_id` separate.
 
 ## When to Use
 
@@ -38,6 +40,8 @@ Do not use this skill when:
 - The harness is already explicitly known and the task does not depend on it
 - You are deciding domain behavior rather than environment identity
 
+If you are uncertain whether the task is about identity or repo conventions, resolve identity first and defer path decisions until the harness is known.
+
 ## Detection Order
 
 Always resolve in this order:
@@ -49,6 +53,13 @@ Always resolve in this order:
 5. User-home directories or local installation traces
 
 Start at the top and stop as soon as you have a decisive answer. If higher-priority evidence conflicts with lower-priority evidence, prefer the higher-priority evidence and record the conflict. If two signals at the same meaningful tier disagree, report `ambiguous` rather than forcing a guess. If you exhaust the sequence without enough evidence, return `unknown` with the strongest facts you found.
+
+Decision shortcut:
+
+1. If the instructions explicitly name the harness, use that.
+2. Else if the live tool surface is uniquely harness-shaped, use that.
+3. Else if two medium signals agree, use that.
+4. Else return `ambiguous` or `unknown` rather than filling in gaps.
 
 ## Confidence Rules
 
@@ -65,6 +76,7 @@ Decision rules:
 - Two medium signals that agree are enough when no high signal exists.
 - Low signals never decide the harness on their own.
 - If signals conflict, report `ambiguous` and list the conflict instead of guessing.
+- If the only strong signal is about the editor family, set `host_editor` and leave `harness_id` unresolved unless another signal distinguishes the harness.
 
 Apply the classes in this strict order:
 1. Explicit self-identification
@@ -98,6 +110,12 @@ conflicts:
 notes: <ambiguity, caveat, or next probe>
 ```
 
+Output rules:
+- Always include every field, even when the answer is `unknown`.
+- Keep evidence short and concrete.
+- Prefer the narrowest truthful label over an aspirational guess.
+- If `bootstrap_surface` is not known, say `unknown` rather than inventing a conventional path.
+
 ## Procedure
 
 ### 1. Check for explicit self-identification
@@ -123,6 +141,7 @@ Examples:
 - A tool surface that does not match any known harness should be treated as evidence for `custom`, not forced into the closest familiar bucket.
 
 Tool surface is stronger than file presence because it reflects the live runtime, not leftover config.
+Do not infer a harness from generic editor affordances alone unless the tool surface is actually harness-specific.
 
 ### 3. Detect framework-specific bootstrap surfaces
 
@@ -168,6 +187,7 @@ Known defaults in this repo:
 - Generic or Codex-style fallback: `AGENTS.md`
 
 This is useful when the repo is prepared for one harness, but it is still not fully authoritative by itself.
+If the repo contains several possible bootstrap files, prefer the one that matches the live session rather than the oldest or most familiar one.
 
 ### 5. Probe environment context
 
@@ -226,6 +246,8 @@ See [references/harness-signals.md](references/harness-signals.md) for the curre
 | Looking only at repo files | Check the live runtime before assuming the repo setup matches it |
 | Returning a label without evidence | Emit the evidence list every time |
 | Letting another agent's notes define your identity | Resolve from your own live session and treat shared artifacts as secondary evidence |
+| Using repo files to override live runtime evidence | Treat repo files as supporting evidence only |
+| Collapsing editor host into harness identity | Report `host_editor` separately from `harness_id` |
 
 ## Worked Result Pattern
 

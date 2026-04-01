@@ -40,6 +40,17 @@ impl HermesHarness {
             plugin_root.join("__init__.py"),
         )
         .expect("copy __init__.py");
+        for module in [
+            "_shared.py",
+            "config.py",
+            "hooks.py",
+            "plugin.py",
+            "process.py",
+            "tools.py",
+        ] {
+            fs::copy(adapter_dir.join(module), plugin_root.join(module))
+                .unwrap_or_else(|err| panic!("copy {module}: {err}"));
+        }
 
         Self {
             install,

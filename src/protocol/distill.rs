@@ -44,7 +44,7 @@ impl Protocol {
             .context("failed to open database connection")?;
         let mut stmt = conn
             .prepare(
-                "SELECT m.id, m.entry_type, m.thread_id, m.turn_id, m.source_type, m.source_id, COALESCE(m.summary, t.content) AS content, m.citation, m.payload, m.updated_at
+                "SELECT m.id, m.entry_type, m.thread_id, m.turn_id, m.source_type, m.source_id, COALESCE(m.summary, t.content) AS content, m.citation, m.payload_json, m.updated_at
                  FROM ledger_entries m
                  JOIN ledger_entry_chunks t ON t.entry_id = m.id
                  WHERE m.namespace_id = ? AND m.thread_id = ? AND m.deleted_at IS NULL AND m.entry_type IN ('user_turn', 'assistant_turn', 'tool_result')
@@ -106,20 +106,6 @@ impl Protocol {
             .collect()
     }
 
-    pub(super) fn distill_provider_branch(provider: &str) -> Option<&'static str> {
-        match provider.trim().to_lowercase().as_str() {
-            "openai" => Some("openai"),
-            "google" | "gemini" => Some("google"),
-            "mistral" | "openrouter" | "custom" => Some("openai_compatible"),
-            "groq" => Some("groq"),
-            "amazon_bedrock" => Some("amazon_bedrock"),
-            "togetherai" => Some("togetherai"),
-            "xai" => Some("xai"),
-            other if !other.is_empty() => None,
-            _ => None,
-        }
-    }
-
     async fn run_distill_model(
         provider: &str,
         model_name: &str,
@@ -136,14 +122,14 @@ impl Protocol {
         });
         let prompt_text = prompt.to_string();
         let system = "You are BeU's compressor model. Return only JSON that matches the requested schema. Keep claims invariant-style, not policy and not narration.";
-        let branch = Self::distill_provider_branch(provider).unwrap_or("unsupported");
+        let normalized_provider = provider.trim().to_lowercase();
         let request_id = format!("distill-{}", uuid::Uuid::new_v4());
         let prompt_chars = prompt_text.chars().count() + system.chars().count();
 
         emit(TraceEvent::ProviderBranchSelected {
             kind: "llm".to_string(),
             provider: provider.to_string(),
-            branch: branch.to_string(),
+            branch: normalized_provider.clone(),
             model: model_name.to_string(),
             base_url_present: base_url.is_some(),
             api_key_present: !api_key.trim().is_empty(),
@@ -212,7 +198,7 @@ impl Protocol {
             }};
         }
 
-        match branch {
+        match normalized_provider.as_str() {
             "openai" => {
                 let mut builder = OpenAI::<DynamicModel>::builder()
                     .provider_name("openai")
@@ -235,7 +221,7 @@ impl Protocol {
             }
             "openai_compatible" => {
                 let mut builder = OpenAICompatible::<DynamicModel>::builder()
-                    .provider_name(provider.to_string())
+                    .provider_name(normalized_provider.clone())
                     .model_name(model_name.to_string())
                     .api_key(api_key.to_string());
                 if let Some(url) = base_url {
@@ -293,7 +279,7 @@ impl Protocol {
                 emit(TraceEvent::ProviderCallFailed {
                     kind: "llm".to_string(),
                     provider: provider.to_string(),
-                    branch: branch.to_string(),
+                    branch: normalized_provider.clone(),
                     model: model_name.to_string(),
                     request_id,
                     stage: "branch".to_string(),

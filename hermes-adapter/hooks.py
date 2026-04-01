@@ -35,23 +35,70 @@ def _reset_hook_count(namespace: str) -> None:
 
 
 def _trigger_backend_distill(namespace: str, thread_id: str, turn_id: str, *, force: bool = False) -> None:
+    logger.info(
+        "BeU distill trigger: namespace=%s thread_id=%s turn_id=%s force=%s",
+        namespace,
+        thread_id,
+        turn_id,
+        force,
+    )
     tick = _ROOT.get_beu().distill_tick(
         {"thread_id": thread_id, "turn_id": turn_id, "event_kind": "session_end" if force else "hook"},
         namespace=namespace,
     )
     hook_count = int(tick.get("hook_count", 0) or 0)
-    if not force and hook_count < _distill_threshold():
+    threshold = _distill_threshold()
+    logger.info(
+        "BeU distill tick: namespace=%s thread_id=%s turn_id=%s hook_count=%s threshold=%s force=%s",
+        namespace,
+        thread_id,
+        turn_id,
+        hook_count,
+        threshold,
+        force,
+    )
+    if not force and hook_count < threshold:
+        logger.info(
+            "BeU distill skipped: namespace=%s thread_id=%s hook_count=%s threshold=%s",
+            namespace,
+            thread_id,
+            hook_count,
+            threshold,
+        )
         return
     payload = next((candidate for candidate in _candidate_distill_payloads() if candidate), {})
     payload = {"thread_id": thread_id, "turn_id": turn_id, "limit": int(os.environ.get("BEU_DISTILL_HISTORY_LIMIT", "").strip() or 48), **payload}
+    logger.info(
+        "BeU distill firing: namespace=%s thread_id=%s turn_id=%s provider=%s model=%s limit=%s",
+        namespace,
+        thread_id,
+        turn_id,
+        payload.get("provider"),
+        payload.get("model"),
+        payload.get("limit"),
+    )
     try:
         result = _ROOT.get_beu().distill(payload, namespace=namespace)
         if not result:
             logger.warning("Backend distill failed")
             return
+        logger.info(
+            "BeU distill completed: namespace=%s thread_id=%s turn_id=%s facts=%s invariants=%s",
+            namespace,
+            thread_id,
+            turn_id,
+            len(result.get("facts", []) or []),
+            len(result.get("invariant_adds", []) or []),
+        )
         _ROOT.get_beu().distill_reset(
             {"thread_id": thread_id, "turn_id": turn_id, "event_kind": "distilled"},
             namespace=namespace,
+        )
+        logger.info(
+            "BeU distill reset: namespace=%s thread_id=%s turn_id=%s",
+            namespace,
+            thread_id,
+            turn_id,
         )
     finally:
         _reset_hook_count(namespace)
@@ -71,16 +118,33 @@ def _index_entry(
     text = content.strip()
     if not text:
         return
-    return _ROOT._index_entry(
+    beu = _ROOT.get_beu()
+    embedding_provider = _ROOT._resolve_embedding_provider(
         namespace=namespace,
-        thread_id=thread_id,
-        entry_id=entry_id,
-        source_type=source_type,
-        source_id=source_id,
-        content=text,
-        metadata=metadata,
-        hook_kwargs=hook_kwargs,
+        kwargs=hook_kwargs or {},
     )
+    payload = {
+        "namespace": namespace,
+        "embed": bool(embedding_provider),
+        "embedding_provider": embedding_provider,
+        "entries": [
+            {
+                "entry_id": entry_id,
+                "source_type": source_type,
+                "source_id": str(
+                    metadata.get("tool_call_id") or metadata.get("run_id") or source_id or entry_id
+                ),
+                "content": text[:2000],
+                "metadata": {
+                    **metadata,
+                    "thread_id": thread_id,
+                },
+            }
+        ],
+    }
+    result = beu.call("index", payload)
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error", "index failed"))
 
 
 def pre_llm_call_hook(**kwargs) -> Optional[str]:

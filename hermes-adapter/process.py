@@ -27,9 +27,12 @@ class BeuProcess:
         env_binary = os.environ.get("BEU_BINARY_PATH")
         if env_binary and Path(env_binary).is_absolute():
             return env_binary
-        hermes_binary = HERMES_HOME / "plugins" / "hermes-adapter" / "beu"
-        if hermes_binary.is_absolute():
-            return str(hermes_binary)
+        plugin_binary = HERMES_HOME / "plugins" / "beu" / "beu"
+        if plugin_binary.exists():
+            return str(plugin_binary)
+        legacy_plugin_binary = HERMES_HOME / "plugins" / "hermes-adapter" / "beu"
+        if legacy_plugin_binary.exists():
+            return str(legacy_plugin_binary)
         return DEFAULT_BEU_BINARY
 
     def _ensure_binary(self) -> None:

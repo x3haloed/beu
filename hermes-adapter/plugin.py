@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from ._shared import logger
 
+BEU_TOOLSET = "beu"
+
 
 def register(ctx, *, api) -> None:
-    logger.info("Registering BeU memory plugin")
+    logger.info("Registering BeU plugin")
     ctx.register_tool(
         name="ledger_list",
-        toolset="memory",
+        toolset=BEU_TOOLSET,
         schema={
             "name": "ledger_list",
             "description": "Browse recent ledger entries from runtime history with provenance-aware metadata. Use this to list or skim entries, not to search by content.",
@@ -25,7 +27,7 @@ def register(ctx, *, api) -> None:
     )
     ctx.register_tool(
         name="ledger_search",
-        toolset="memory",
+        toolset=BEU_TOOLSET,
         schema={
             "name": "ledger_search",
             "description": "Search ledger entries by meaning and keywords across runtime history, then return matching ledger entries with provenance-aware metadata.",
@@ -45,7 +47,7 @@ def register(ctx, *, api) -> None:
     )
     ctx.register_tool(
         name="ledger_get",
-        toolset="memory",
+        toolset=BEU_TOOLSET,
         schema={
             "name": "ledger_get",
             "description": "Fetch one ledger entry with full content, provenance, and citation metadata.",
@@ -63,5 +65,4 @@ def register(ctx, *, api) -> None:
     ctx.register_hook("post_tool_call", api.post_tool_call_hook)
     ctx.register_hook("on_session_start", api.on_session_start_hook)
     ctx.register_hook("on_session_end", api.on_session_end_hook)
-    logger.info("BeU memory plugin registered successfully")
-
+    logger.info("BeU plugin registered successfully")

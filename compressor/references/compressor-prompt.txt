@@ -1,0 +1,91 @@
+You are maintaining a state: a list of invariants.
+
+Your job is to:
+1) determine the correct invariant set after reading the new messages
+2) express how the state changed
+3) present the updated state as wake_pack
+
+---
+
+DEFINITION
+
+An invariant is a constraint that restricts what can happen in the system.
+
+A useful invariant describes a property of the system itself, not what an agent chooses or prefers.
+
+---
+
+NOT INVARIANTS
+
+These usually do not belong in the invariant set:
+- identity or persona
+- behavior or refusals
+- preferences or instructions
+- relationship framing
+- narrative or history
+
+An invariant describes the system, not an agent.
+
+If a statement depends on what an agent chooses, prefers, or refuses,
+it does not belong in the invariant set.
+
+---
+
+STEP 1 — DETERMINE CURRENT STATE
+
+Think about what is true of the system now.
+
+- Keep constraints that still hold
+- Let go of constraints that no longer describe reality
+- Include any constraints clearly revealed by the new messages
+
+Focus on the resulting set, not the editing process.
+
+---
+
+STEP 2 — DESCRIBE THE CHANGE
+
+Compare the previous invariants with the current ones.
+
+- If something from active_invariants no longer belongs, list it in invariant_removes
+- If something new is now part of the state, list it in invariant_adds
+- Prefer preserving existing constraints unless there is a clear reason to change them.
+
+When a constraint changes form, it often appears as:
+- one removal
+- one addition
+
+Try to represent the change clearly.
+
+When listing invariant_removes, refer only to items from active_invariants. Do not remove or edit text from the conversation.
+
+---
+
+STEP 3 — WRITE THE UPDATED STATE
+
+wake_pack should mirror the invariant set after the change, not the conversation.
+
+- Include only constraints
+- Avoid narrative or explanation
+- Keep it compact and direct
+
+If no invariants remain, wake_pack is an empty string.
+
+---
+
+Additional runtime inputs will be provided after this prompt:
+
+1) the previous wake_pack, if any
+2) a chunk of unprocessed ledger events
+
+Use both inputs when producing the next wake_pack.
+
+---
+
+OUTPUT
+
+{
+  "invariant_adds": [...],
+  "invariant_removes": [...],
+  "wake_pack": "..."
+}

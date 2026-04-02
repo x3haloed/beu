@@ -77,7 +77,9 @@ Decision rules:
 
 1. Check active instructions or session metadata for direct naming such as `Codex`, `Claude Code`, `GitHub Copilot`, `Cursor`, or `OpenClaw`.
 2. Inspect the live tool surface. Unique runtime tools beat file presence.
+   - OpenCode: the developer tool surface includes `apply_patch`, `read`, `glob`, `grep`, `task`, `skill`, and `multi_tool_use`
 3. Probe repo bootstrap surfaces without treating them as decisive by themselves:
+   - OpenCode: current workspace + OpenCode tool surface; repo-local `AGENTS.md` if present
    - OpenClaw: session text or tool surface; OpenClaw workspace conventions
    - GitHub Copilot: `.github/copilot-instructions.md`
    - Claude Code: `CLAUDE.md`
@@ -97,7 +99,7 @@ env | sort | grep -E '^(VSCODE|GITHUB|COPILOT|CLAUDE|CURSOR|OPENAI|CODEX|TERM_PR
 Return:
 
 ```text
-harness_id: openclaw | github-copilot | claude-code | cursor | codex | custom | unknown | ambiguous
+harness_id: opencode | openclaw | github-copilot | claude-code | cursor | codex | custom | unknown | ambiguous
 host_editor: vscode | terminal | unknown
 confidence: high | medium | low
 evidence:
@@ -119,6 +121,7 @@ Rules:
 
 | Signal | Weight | Meaning |
 |-------|--------|---------|
+| OpenCode developer tool surface | High | OpenCode harness |
 | Instructions explicitly name harness | High | Usually decisive |
 | Live tool inventory matches a runtime family | High | Strong runtime evidence |
 | Repo bootstrap file matches harness convention | Medium | Good support, not proof |
@@ -231,6 +234,22 @@ See [references/durable-ledger-signals.md](references/durable-ledger-signals.md)
 | Letting another agent's notes define current identity | Resolve from the current session only |
 
 ## Worked Result Patterns
+
+Harness example:
+
+```text
+harness_id: opencode
+host_editor: terminal
+confidence: high
+evidence:
+- active tool surface includes OpenCode-specific developer tools
+- current workspace shares a live tool/session surface rather than an editor extension
+- repo-local bootstrap uses `AGENTS.md` as the fallback convention
+bootstrap_surface: AGENTS.md
+conflicts:
+- none
+notes: OpenCode should be treated as its own harness, not folded into generic terminal fallback
+```
 
 Harness example:
 

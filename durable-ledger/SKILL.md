@@ -56,6 +56,8 @@ Pick the plugin reference only from the detected harness:
 
 Do not force a plugin choice from a weak signal.
 
+If the verified harness is OpenCode, do not install a harness plugin from this reference set unless a future OpenCode-specific plugin surface is added. Treat OpenCode as a harness that may use repo-local or workspace-local durable ledger conventions instead of a dedicated plugin install path.
+
 If the harness is GitHub Copilot in VS Code editor mode rather than Copilot CLI, this reference set does not automatically imply a CLI plugin install. Distinguish editor-hosted Copilot from Copilot CLI before choosing [references/copilot-cli-plugin](references/copilot-cli-plugin).
 
 ## Storage Location
@@ -72,6 +74,7 @@ The ledger root should be:
 
 | Harness | Default storage rule |
 |---------|----------------------|
+| OpenCode | Prefer a repo-local append-only ledger or workspace-owned state directory that the current session can reliably reopen |
 | Hermes | Prefer the harness-owned state location, typically `${HERMES_HOME}/state/durable-ledger`, unless the user already has a repo or workspace home for the agent |
 | OpenClaw | Prefer the configured plugin `storageRoot` or the harness-owned state directory |
 | GitHub Copilot CLI | Use the fixed per-user root `~/.copilot/state/durable-ledger` unless an explicit Copilot durable-ledger override is already present |
@@ -180,6 +183,7 @@ Do not configure multiple ledger roots for the same live harness unless the user
 | Situation | Correct move |
 |-----------|--------------|
 | Harness is unresolved | Run [../sanity-orientation/SKILL.md](../sanity-orientation/SKILL.md) first |
+| Harness is OpenCode | Start from [references/opencode-plugin](references/opencode-plugin) and use an OpenCode plugin/load path |
 | Harness is Hermes | Start from [references/hermes-plugin](references/hermes-plugin) |
 | Harness is OpenClaw | Start from [references/openclaw-plugin](references/openclaw-plugin) |
 | Harness is GitHub Copilot CLI | Start from [references/copilot-cli-plugin](references/copilot-cli-plugin) and check `~/.copilot` for an existing plugin install, config override, or ledger root |
@@ -189,6 +193,7 @@ Do not configure multiple ledger roots for the same live harness unless the user
 
 | Mistake | Better move |
 |--------|-------------|
+| Assuming OpenCode should follow the same plugin install path as Copilot CLI | Treat OpenCode separately and prefer repo/workspace-local durable state |
 | Picking a plugin before resolving the harness | Use [../sanity-orientation/SKILL.md](../sanity-orientation/SKILL.md) first |
 | Treating GitHub Copilot in VS Code as automatically equivalent to Copilot CLI | Distinguish editor-hosted Copilot from Copilot CLI |
 | Assuming install alone proves the Hermes ledger is working | Verify a real user turn and confirm the JSONL files were written |

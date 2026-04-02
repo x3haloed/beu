@@ -1,6 +1,6 @@
 ---
 name: durable-ledger
-description: Use when an agent needs to configure a durable ledger in the current harness, choose a matching ledger plugin reference, or decide where durable ledger files should live.
+description: Use when an agent needs to configure a durable ledger in a verified harness, choose a matching ledger plugin reference, or decide where durable ledger files should live.
 ---
 
 # Durable Ledger
@@ -12,6 +12,8 @@ Configure the ledger only after you know two things:
 1. What harness is actually running this session.
 2. Whether a durable ledger already exists.
 
+If the harness is not verified, stop. Do not guess a plugin, do not scan a harness-specific install directory, and do not treat one harness as the default fallback for another.
+
 **Core principle:** choose the plugin and storage location from live runtime facts, not from repo habit or whichever reference looks closest.
 
 This skill is for configuring a durable ledger, not for compression or retrieval.
@@ -19,9 +21,9 @@ This skill is for configuring a durable ledger, not for compression or retrieval
 ## When to Use
 
 Use this skill when:
-- you need to set up a durable ledger for a new harness
+- you need to set up a durable ledger for a verified harness
 - the current harness does not yet have ledger storage configured
-- you need to choose one of the reference plugins in this directory
+- you need to choose the reference plugin for the harness that is actually running
 - you need to decide where the ledger should live on disk
 
 Do not use this skill when:
@@ -38,13 +40,13 @@ You need both outputs:
 - harness identity
 - durable ledger status
 
-If harness detection is `ambiguous` or `unknown`, stop and resolve that before choosing a plugin.
+If harness detection is `ambiguous` or `unknown`, stop. Do not choose or install any harness plugin until the harness is verified.
 
 If ledger status is `present`, repair or extend the existing ledger instead of installing a second one.
 
 ## Plugin Selection
 
-Pick the plugin reference from the detected harness:
+Pick the plugin reference only from the detected harness:
 
 | Detected harness | Reference plugin | Notes |
 |------------------|------------------|-------|
@@ -72,13 +74,25 @@ The ledger root should be:
 |---------|----------------------|
 | Hermes | Prefer the harness-owned state location, typically `${HERMES_HOME}/state/durable-ledger`, unless the user already has a repo or workspace home for the agent |
 | OpenClaw | Prefer the configured plugin `storageRoot` or the harness-owned state directory |
-| Copilot CLI | Use the fixed per-user root `~/.copilot/state/durable-ledger` unless an explicit Copilot durable-ledger override is already present |
+| GitHub Copilot CLI | Use the fixed per-user root `~/.copilot/state/durable-ledger` unless an explicit Copilot durable-ledger override is already present |
 
-### Copilot CLI rule
+### Hermes rule
 
-For the Copilot CLI plugin, use a stable plugin install path and the fixed Copilot-owned ledger root:
+Only when the verified harness is Hermes or Hermes-compatible, install the reference plugin into the user plugin root and verify it by exercising a real turn path:
 
-1. Install the plugin from this directory, for example:
+1. Install the plugin from this directory into `${HERMES_HOME:-~/.hermes}/plugins/durable-ledger`.
+2. Start a fresh Hermes session so discovery rescans the user plugin root.
+3. Confirm `discover_plugins()` or `get_plugin_manager().list_plugins()` shows `durable-ledger` as enabled.
+4. Invoke `pre_llm_call` / `post_llm_call` with a representative `user_message` and `assistant_response`.
+5. Confirm JSONL files appear under `${HERMES_HOME:-~/.hermes}/state/durable-ledger/v1/namespaces/<namespace>/`.
+
+If the host CLI is unavailable or awkward to reach, use the direct-hook fallback in the durable-ledger-verification skill.
+
+### GitHub Copilot CLI rule
+
+Only when the verified harness is GitHub Copilot CLI, use a stable plugin install path and the fixed Copilot-owned ledger root:
+
+1. Install the plugin from this directory only after harness verification, for example:
 
    ```text
    copilot plugin install /Users/chad/Repos/beu/durable-ledger/references/copilot-cli-plugin
@@ -116,7 +130,7 @@ For the Copilot CLI plugin, use a stable plugin install path and the fixed Copil
 
 4. Start a fresh Copilot CLI session. The hooks derive the namespace from the session `cwd` and common project markers, while storage stays under the fixed Copilot-owned root unless overridden.
 
-5. When checking for evidence of an existing Copilot CLI ledger install, look in this order:
+5. When checking for evidence of an existing GitHub Copilot CLI ledger install, look in this order:
 
    ```text
    copilot plugin list
@@ -139,11 +153,11 @@ ledger_entry_chunks.jsonl
 .runtime-state.json
 ```
 
-To verify the setup, confirm that `copilot plugin list` shows `durable-ledger`, then trigger a new session and check that the namespace directory exists and the files above are created.
+For a verified GitHub Copilot CLI harness, confirm that `copilot plugin list` shows `durable-ledger`, then trigger a new session and check that the namespace directory exists and the files above are created.
 
 Good examples:
-- the fixed Copilot-owned state directory under `~/.copilot/state/durable-ledger`
-- a user-level override in `~/.copilot/durable-ledger.json` when the default root or namespace needs adjustment
+- the fixed Copilot-owned state directory under `~/.copilot/state/durable-ledger` when the verified harness is GitHub Copilot CLI
+- a user-level override in `~/.copilot/durable-ledger.json` when the verified harness is GitHub Copilot CLI and the default root or namespace needs adjustment
 
 Bad examples:
 - `/tmp/...`
@@ -168,7 +182,7 @@ Do not configure multiple ledger roots for the same live harness unless the user
 | Harness is unresolved | Run [../sanity-orientation/SKILL.md](../sanity-orientation/SKILL.md) first |
 | Harness is Hermes | Start from [references/hermes-plugin](references/hermes-plugin) |
 | Harness is OpenClaw | Start from [references/openclaw-plugin](references/openclaw-plugin) |
-| Harness is Copilot CLI | Start from [references/copilot-cli-plugin](references/copilot-cli-plugin) and check `~/.copilot` for an existing plugin install, config override, or ledger root |
+| Harness is GitHub Copilot CLI | Start from [references/copilot-cli-plugin](references/copilot-cli-plugin) and check `~/.copilot` for an existing plugin install, config override, or ledger root |
 | Ledger already exists | Repair or extend it instead of creating a parallel ledger |
 
 ## Common Mistakes
@@ -177,6 +191,6 @@ Do not configure multiple ledger roots for the same live harness unless the user
 |--------|-------------|
 | Picking a plugin before resolving the harness | Use [../sanity-orientation/SKILL.md](../sanity-orientation/SKILL.md) first |
 | Treating GitHub Copilot in VS Code as automatically equivalent to Copilot CLI | Distinguish editor-hosted Copilot from Copilot CLI |
-| Using the current cwd itself as the ledger root for Copilot CLI | Use the fixed root under `~/.copilot/state/durable-ledger` |
-| Creating a second ledger beside an existing one | Repair or adopt the existing ledger |
+| Assuming install alone proves the Hermes ledger is working | Verify a real user turn and confirm the JSONL files were written |
+| Using the current cwd itself as the ledger root for GitHub Copilot CLI | Use the fixed root under `~/.copilot/state/durable-ledger` |
 | Choosing a storage path the agent cannot reliably reopen later | Prefer harness-owned state or a user-level Copilot override |

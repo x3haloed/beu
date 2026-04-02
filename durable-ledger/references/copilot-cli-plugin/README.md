@@ -1,6 +1,6 @@
 # Copilot CLI Durable Ledger Plugin
 
-This plugin installs into GitHub Copilot CLI and uses hooks to write an append-only JSONL durable ledger.
+Use this reference only when the verified harness is GitHub Copilot CLI. This plugin installs into GitHub Copilot CLI and uses hooks to write an append-only JSONL durable ledger.
 
 ## Install
 

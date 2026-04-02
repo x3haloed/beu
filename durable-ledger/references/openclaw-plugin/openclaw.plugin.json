@@ -1,0 +1,6 @@
+{
+  "id": "durable-ledger-memory",
+  "kind": "memory",
+  "name": "Durable Ledger",
+  "description": "Hook-driven durable ledger storage using append-only JSONL files"
+}

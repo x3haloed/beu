@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "python3 scripts/hook.py session-start",
+        "cwd": ".",
+        "timeoutSec": 30,
+        "comment": "Initialize durable-ledger session state and append session-start records."
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "python3 scripts/hook.py user-prompt-submitted",
+        "cwd": ".",
+        "timeoutSec": 30,
+        "comment": "Append user-turn ledger records for each submitted prompt."
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "python3 scripts/hook.py pre-tool-use",
+        "cwd": ".",
+        "timeoutSec": 30,
+        "comment": "Append tool-call ledger records before tool execution."
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "python3 scripts/hook.py post-tool-use",
+        "cwd": ".",
+        "timeoutSec": 30,
+        "comment": "Append tool-result ledger records after tool execution."
+      }
+    ],
+    "errorOccurred": [
+      {
+        "type": "command",
+        "bash": "python3 scripts/hook.py error-occurred",
+        "cwd": ".",
+        "timeoutSec": 30,
+        "comment": "Append error ledger records for agent execution failures."
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "python3 scripts/hook.py session-end",
+        "cwd": ".",
+        "timeoutSec": 30,
+        "comment": "Append session-end records and clear active session state."
+      }
+    ]
+  }
+}

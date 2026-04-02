@@ -1,0 +1,13 @@
+{
+  "name": "durable-ledger",
+  "description": "Hook-driven durable ledger storage for GitHub Copilot CLI using append-only JSONL files.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Chad Kirby"
+  },
+  "license": "MIT",
+  "keywords": ["copilot", "hooks", "ledger", "jsonl"],
+  "category": "development",
+  "tags": ["audit", "durable-ledger", "filesystem"],
+  "hooks": "hooks.json"
+}

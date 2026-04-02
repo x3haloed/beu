@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 
 CHUNK_SIZE = 1200
+RUNTIME_STATE_MAX_AGE_SECONDS = 900
 TABLE_FILES = (
     "workspaces.jsonl",
     "agents.jsonl",
@@ -21,6 +22,14 @@ TABLE_FILES = (
     "distill_state.jsonl",
     "ledger_entries.jsonl",
     "ledger_entry_chunks.jsonl",
+)
+
+WORKSPACE_MARKERS = (
+    ".git",
+    "pyproject.toml",
+    "package.json",
+    "Cargo.toml",
+    "go.mod",
 )
 
 
@@ -103,14 +112,55 @@ class Settings:
     namespace: str
 
 
+def _load_settings_file(config_dir: Path) -> dict[str, Any]:
+    config_path = config_dir / "durable-ledger.json"
+    if not config_path.is_file():
+        return {}
+    try:
+        loaded = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _resolve_workspace_root(start_path: Path) -> Path:
+    for candidate in (start_path, *start_path.parents):
+        if any((candidate / marker).exists() for marker in WORKSPACE_MARKERS):
+            return candidate
+    return start_path
+
+
+def _default_namespace(workspace_root: Path) -> str:
+    label = workspace_root.name.strip() or "workspace"
+    digest = hashlib.sha1(str(workspace_root).encode("utf-8")).hexdigest()[:8]
+    return _sanitize_namespace(f"{label}-{digest}")
+
+
+def _parse_rfc3339(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 def load_settings(cwd: str | None) -> Settings:
-    storage_root = Path(
-        os.environ.get("DURABLE_LEDGER_STORAGE_ROOT", "").strip()
-        or Path.home() / ".copilot" / "state" / "durable-ledger"
-    ).expanduser()
+    workspace_root = _resolve_workspace_root(Path(cwd or os.getcwd()).expanduser().resolve())
+    config_dir = Path.home() / ".copilot"
+    config = _load_settings_file(config_dir)
+    storage_root_value = os.environ.get("DURABLE_LEDGER_STORAGE_ROOT", "").strip() or str(
+        config.get("storageRoot") or ""
+    ).strip()
+    if storage_root_value:
+        storage_root = Path(storage_root_value).expanduser()
+        if not storage_root.is_absolute():
+            storage_root = (config_dir / storage_root).resolve()
+    else:
+        storage_root = config_dir / "state" / "durable-ledger"
     namespace_override = os.environ.get("DURABLE_LEDGER_NAMESPACE", "").strip()
-    derived = cwd or os.getcwd()
-    namespace = namespace_override or _stable_id("workspace", Path(derived).resolve())
+    namespace_config = str(config.get("namespace") or "").strip()
+    namespace = namespace_override or namespace_config or _default_namespace(workspace_root)
     return Settings(storage_root=storage_root, namespace=_sanitize_namespace(namespace))
 
 
@@ -124,6 +174,7 @@ class CopilotCliLedgerStore:
         self._upsert_workspace(context)
         self._upsert_agent(context)
         thread_id = self._session_thread_id(payload, context)
+        existing_state = self._load_runtime_state(context, payload)
         context["thread_id"] = thread_id
         self._upsert_thread(context, self._thread_title(payload))
         self._write_runtime_state(
@@ -131,9 +182,9 @@ class CopilotCliLedgerStore:
             {
                 "session_id": thread_id,
                 "thread_id": thread_id,
-                "current_turn_id": None,
+                "current_turn_id": existing_state.get("current_turn_id"),
                 "source": payload.get("source") or "new",
-                "started_at": self._timestamp_to_rfc3339(payload.get("timestamp")),
+                "started_at": existing_state.get("started_at") or self._timestamp_to_rfc3339(payload.get("timestamp")),
             },
         )
         self._append_distill_state(context, None, "session_start")
@@ -151,7 +202,7 @@ class CopilotCliLedgerStore:
                 "event": "session_start",
                 "source": payload.get("source"),
                 "initial_prompt": payload.get("initialPrompt"),
-                "metadata": {"thread_id": thread_id, "cwd": context["workspace_root"]},
+                "metadata": {"thread_id": thread_id, "cwd": context["active_cwd"]},
             },
         )
 
@@ -181,7 +232,7 @@ class CopilotCliLedgerStore:
             "user_turn",
             {
                 "message": prompt,
-                "metadata": {"thread_id": thread_id, "cwd": context["workspace_root"]},
+                "metadata": {"thread_id": thread_id, "cwd": context["active_cwd"]},
             },
         )
         self._append_ledger_entry(
@@ -196,7 +247,7 @@ class CopilotCliLedgerStore:
             citation=turn_id,
             payload={
                 "content": prompt,
-                "metadata": {"thread_id": thread_id, "cwd": context["workspace_root"]},
+                "metadata": {"thread_id": thread_id, "cwd": context["active_cwd"]},
             },
         )
         self._append_distill_state(context, turn_id, "user_turn")
@@ -215,7 +266,7 @@ class CopilotCliLedgerStore:
             "tool_name": tool_name,
             "tool_call_id": tool_call_id,
             "tool_args": tool_args,
-            "metadata": {"thread_id": thread_id, "cwd": context["workspace_root"]},
+            "metadata": {"thread_id": thread_id, "cwd": context["active_cwd"]},
         }
         self._append_event(context, turn_id, "tool_call", event_payload)
         self._append_ledger_entry(
@@ -249,7 +300,7 @@ class CopilotCliLedgerStore:
             "tool_call_id": tool_call_id,
             "tool_args": tool_args,
             "tool_result": tool_result,
-            "metadata": {"thread_id": thread_id, "cwd": context["workspace_root"]},
+            "metadata": {"thread_id": thread_id, "cwd": context["active_cwd"]},
         }
         self._append_event(context, turn_id, "tool_result", event_payload)
         self._append_ledger_entry(
@@ -285,7 +336,7 @@ class CopilotCliLedgerStore:
         message = str(error.get("message") or "unknown error")
         event_payload = {
             "error": error,
-            "metadata": {"thread_id": thread_id, "cwd": context["workspace_root"]},
+            "metadata": {"thread_id": thread_id, "cwd": context["active_cwd"]},
         }
         self._upsert_turn(context, turn_id, {"status": "error", "error": message})
         self._append_event(context, turn_id, "error", event_payload)
@@ -324,20 +375,22 @@ class CopilotCliLedgerStore:
             payload={
                 "event": "session_end",
                 "reason": reason,
-                "metadata": {"thread_id": thread_id, "cwd": context["workspace_root"]},
+                "metadata": {"thread_id": thread_id, "cwd": context["active_cwd"]},
             },
         )
         self._clear_runtime_state(context)
 
     def _context(self, payload: dict[str, Any]) -> dict[str, Any]:
-        cwd = str(payload.get("cwd") or os.getcwd())
-        workspace_id = _stable_id("workspace", Path(cwd).resolve())
+        workspace_path = _resolve_workspace_root(Path(str(payload.get("cwd") or os.getcwd())).expanduser().resolve())
+        workspace_root = str(workspace_path)
+        workspace_id = _stable_id("workspace", workspace_path)
         agent_id = _stable_id("agent", workspace_id, "copilot-cli")
         namespace_dir = self.settings.storage_root / "v1" / "namespaces" / self.settings.namespace
         return {
             "namespace": self.settings.namespace,
             "namespace_dir": namespace_dir,
-            "workspace_root": cwd,
+            "workspace_root": workspace_root,
+            "active_cwd": str(payload.get("cwd") or os.getcwd()),
             "workspace_id": workspace_id,
             "agent_id": agent_id,
             "channel": "copilot-cli",
@@ -353,24 +406,43 @@ class CopilotCliLedgerStore:
     def _runtime_state_path(self, context: dict[str, Any]) -> Path:
         return context["namespace_dir"] / ".runtime-state.json"
 
-    def _load_runtime_state(self, context: dict[str, Any]) -> dict[str, Any]:
+    def _load_runtime_state(self, context: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
         path = self._runtime_state_path(context)
         if not path.is_file():
             return {}
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            loaded = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return {}
+        if not isinstance(loaded, dict):
+            return {}
+        if not self._runtime_state_is_fresh(loaded, payload):
+            self._clear_runtime_state(context)
+            return {}
+        return loaded
 
     def _write_runtime_state(self, context: dict[str, Any], state: dict[str, Any]) -> None:
         path = self._runtime_state_path(context)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(_safe_json_dumps(state), encoding="utf-8")
+        state_to_write = dict(state)
+        state_to_write["updated_at"] = _now()
+        path.write_text(_safe_json_dumps(state_to_write), encoding="utf-8")
 
     def _update_runtime_state(self, context: dict[str, Any], **updates: Any) -> None:
         state = self._load_runtime_state(context)
         state.update(updates)
         self._write_runtime_state(context, state)
+
+    def _runtime_state_is_fresh(self, state: dict[str, Any], payload: dict[str, Any] | None) -> bool:
+        reference_time = _parse_rfc3339(state.get("updated_at")) or _parse_rfc3339(state.get("started_at"))
+        if reference_time is None:
+            return False
+        payload_timestamp = payload.get("timestamp") if isinstance(payload, dict) else None
+        if isinstance(payload_timestamp, (int, float)):
+            event_time = datetime.fromtimestamp(payload_timestamp / 1000, tz=timezone.utc)
+        else:
+            event_time = datetime.now(timezone.utc)
+        return abs((event_time - reference_time).total_seconds()) <= RUNTIME_STATE_MAX_AGE_SECONDS
 
     def _clear_runtime_state(self, context: dict[str, Any]) -> None:
         path = self._runtime_state_path(context)
@@ -378,15 +450,15 @@ class CopilotCliLedgerStore:
             path.unlink()
 
     def _session_thread_id(self, payload: dict[str, Any], context: dict[str, Any]) -> str:
-        state = self._load_runtime_state(context)
-        source = str(payload.get("source") or "new")
-        if source == "resume" and state.get("thread_id"):
+        state = self._load_runtime_state(context, payload)
+        if state.get("thread_id"):
             return str(state["thread_id"])
+        source = str(payload.get("source") or "new")
         timestamp = payload.get("timestamp") or uuid.uuid4()
         return _stable_id("thread", context["agent_id"], context["channel"], timestamp, source)
 
     def _ensure_active_thread(self, context: dict[str, Any], payload: dict[str, Any]) -> str:
-        state = self._load_runtime_state(context)
+        state = self._load_runtime_state(context, payload)
         if state.get("thread_id"):
             return str(state["thread_id"])
         thread_id = self._session_thread_id(payload, context)
@@ -395,9 +467,9 @@ class CopilotCliLedgerStore:
             {
                 "session_id": thread_id,
                 "thread_id": thread_id,
-                "current_turn_id": None,
+                "current_turn_id": state.get("current_turn_id"),
                 "source": payload.get("source") or "startup",
-                "started_at": self._timestamp_to_rfc3339(payload.get("timestamp")),
+                "started_at": state.get("started_at") or self._timestamp_to_rfc3339(payload.get("timestamp")),
             },
         )
         self._upsert_workspace(context)

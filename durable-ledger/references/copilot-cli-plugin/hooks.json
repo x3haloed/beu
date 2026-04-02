@@ -4,8 +4,7 @@
     "sessionStart": [
       {
         "type": "command",
-        "bash": "python3 scripts/hook.py session-start",
-        "cwd": ".",
+        "bash": "HOOK=$(python3 -c 'import json, os, pathlib; base = pathlib.Path(os.environ.get(\"COPILOT_CONFIG_DIR\", \"\")).expanduser() if os.environ.get(\"COPILOT_CONFIG_DIR\") else pathlib.Path.home() / \".copilot\"; root = base / \"installed-plugins\"; print(next((str(manifest.parent / \"scripts\" / \"hook.py\") for manifest in root.glob(\"**/plugin.json\") if json.loads(manifest.read_text(encoding=\"utf-8\")).get(\"name\") == \"durable-ledger\"), \"\"))') && [ -n \"$HOOK\" ] && python3 \"$HOOK\" session-start",
         "timeoutSec": 30,
         "comment": "Initialize durable-ledger session state and append session-start records."
       }
@@ -13,8 +12,7 @@
     "userPromptSubmitted": [
       {
         "type": "command",
-        "bash": "python3 scripts/hook.py user-prompt-submitted",
-        "cwd": ".",
+        "bash": "HOOK=$(python3 -c 'import json, os, pathlib; base = pathlib.Path(os.environ.get(\"COPILOT_CONFIG_DIR\", \"\")).expanduser() if os.environ.get(\"COPILOT_CONFIG_DIR\") else pathlib.Path.home() / \".copilot\"; root = base / \"installed-plugins\"; print(next((str(manifest.parent / \"scripts\" / \"hook.py\") for manifest in root.glob(\"**/plugin.json\") if json.loads(manifest.read_text(encoding=\"utf-8\")).get(\"name\") == \"durable-ledger\"), \"\"))') && [ -n \"$HOOK\" ] && python3 \"$HOOK\" user-prompt-submitted",
         "timeoutSec": 30,
         "comment": "Append user-turn ledger records for each submitted prompt."
       }
@@ -22,8 +20,7 @@
     "preToolUse": [
       {
         "type": "command",
-        "bash": "python3 scripts/hook.py pre-tool-use",
-        "cwd": ".",
+        "bash": "HOOK=$(python3 -c 'import json, os, pathlib; base = pathlib.Path(os.environ.get(\"COPILOT_CONFIG_DIR\", \"\")).expanduser() if os.environ.get(\"COPILOT_CONFIG_DIR\") else pathlib.Path.home() / \".copilot\"; root = base / \"installed-plugins\"; print(next((str(manifest.parent / \"scripts\" / \"hook.py\") for manifest in root.glob(\"**/plugin.json\") if json.loads(manifest.read_text(encoding=\"utf-8\")).get(\"name\") == \"durable-ledger\"), \"\"))') && [ -n \"$HOOK\" ] && python3 \"$HOOK\" pre-tool-use",
         "timeoutSec": 30,
         "comment": "Append tool-call ledger records before tool execution."
       }
@@ -31,8 +28,7 @@
     "postToolUse": [
       {
         "type": "command",
-        "bash": "python3 scripts/hook.py post-tool-use",
-        "cwd": ".",
+        "bash": "HOOK=$(python3 -c 'import json, os, pathlib; base = pathlib.Path(os.environ.get(\"COPILOT_CONFIG_DIR\", \"\")).expanduser() if os.environ.get(\"COPILOT_CONFIG_DIR\") else pathlib.Path.home() / \".copilot\"; root = base / \"installed-plugins\"; print(next((str(manifest.parent / \"scripts\" / \"hook.py\") for manifest in root.glob(\"**/plugin.json\") if json.loads(manifest.read_text(encoding=\"utf-8\")).get(\"name\") == \"durable-ledger\"), \"\"))') && [ -n \"$HOOK\" ] && python3 \"$HOOK\" post-tool-use",
         "timeoutSec": 30,
         "comment": "Append tool-result ledger records after tool execution."
       }
@@ -40,8 +36,7 @@
     "errorOccurred": [
       {
         "type": "command",
-        "bash": "python3 scripts/hook.py error-occurred",
-        "cwd": ".",
+        "bash": "HOOK=$(python3 -c 'import json, os, pathlib; base = pathlib.Path(os.environ.get(\"COPILOT_CONFIG_DIR\", \"\")).expanduser() if os.environ.get(\"COPILOT_CONFIG_DIR\") else pathlib.Path.home() / \".copilot\"; root = base / \"installed-plugins\"; print(next((str(manifest.parent / \"scripts\" / \"hook.py\") for manifest in root.glob(\"**/plugin.json\") if json.loads(manifest.read_text(encoding=\"utf-8\")).get(\"name\") == \"durable-ledger\"), \"\"))') && [ -n \"$HOOK\" ] && python3 \"$HOOK\" error-occurred",
         "timeoutSec": 30,
         "comment": "Append error ledger records for agent execution failures."
       }
@@ -49,8 +44,7 @@
     "sessionEnd": [
       {
         "type": "command",
-        "bash": "python3 scripts/hook.py session-end",
-        "cwd": ".",
+        "bash": "HOOK=$(python3 -c 'import json, os, pathlib; base = pathlib.Path(os.environ.get(\"COPILOT_CONFIG_DIR\", \"\")).expanduser() if os.environ.get(\"COPILOT_CONFIG_DIR\") else pathlib.Path.home() / \".copilot\"; root = base / \"installed-plugins\"; print(next((str(manifest.parent / \"scripts\" / \"hook.py\") for manifest in root.glob(\"**/plugin.json\") if json.loads(manifest.read_text(encoding=\"utf-8\")).get(\"name\") == \"durable-ledger\"), \"\"))') && [ -n \"$HOOK\" ] && python3 \"$HOOK\" session-end",
         "timeoutSec": 30,
         "comment": "Append session-end records and clear active session state."
       }

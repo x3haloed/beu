@@ -31,7 +31,8 @@ Do not use this skill when:
 
 ## First Step
 
-Always run [../sanity-orientation/SKILL.md](../sanity-orientation/SKILL.md) first.
+Always run [../sanity-orientation/SKILL.md](../sanity-orientation/SKILL.md) first if it is available in the current checkout.
+If that path is missing, resolve harness identity and ledger status from live evidence before choosing a plugin.
 
 You need both outputs:
 - harness identity
@@ -71,29 +72,83 @@ The ledger root should be:
 |---------|----------------------|
 | Hermes | Prefer the harness-owned state location, typically `${HERMES_HOME}/state/durable-ledger`, unless the user already has a repo or workspace home for the agent |
 | OpenClaw | Prefer the configured plugin `storageRoot` or the harness-owned state directory |
-| Copilot CLI | Do **not** assume the current working directory is the durable home. Ask the user to choose one stable home directory first |
+| Copilot CLI | Use the fixed per-user root `~/.copilot/state/durable-ledger` unless an explicit Copilot durable-ledger override is already present |
 
 ### Copilot CLI rule
 
-Copilot CLI does not give the agent a durable home base by default.
+For the Copilot CLI plugin, use a stable plugin install path and the fixed Copilot-owned ledger root:
 
-When configuring [references/copilot-cli-plugin](references/copilot-cli-plugin), ask the user explicitly:
+1. Install the plugin from this directory, for example:
+
+   ```text
+   copilot plugin install /Users/chad/Repos/beu/durable-ledger/references/copilot-cli-plugin
+   ```
+
+   Important:
+   - Use `copilot plugin install`, not `copilot install`.
+   - The installed CLI help on this machine does not advertise local-path installs, but the command does work with an absolute local path.
+   - If the agent is unsure, prefer an absolute path over a relative path.
+
+2. The plugin writes by default under:
+
+   ```text
+   ~/.copilot/state/durable-ledger/v1/namespaces/<workspace-namespace>/
+   ```
+
+   The namespace is derived from a stable workspace root resolved from the current `cwd` by walking upward until a common project marker such as `.git`, `pyproject.toml`, `package.json`, `Cargo.toml`, or `go.mod` is found.
+
+3. If you need to override that without changing how Copilot is launched, create:
+
+   ```text
+   ~/.copilot/durable-ledger.json
+   ```
+
+   Example:
+
+   ```json
+   {
+     "namespace": "agentic-workspace",
+       "storageRoot": "state/durable-ledger"
+   }
+   ```
+
+   `storageRoot` may be absolute or relative to `~/.copilot`.
+
+4. Start a fresh Copilot CLI session. The hooks derive the namespace from the session `cwd` and common project markers, while storage stays under the fixed Copilot-owned root unless overridden.
+
+5. When checking for evidence of an existing Copilot CLI ledger install, look in this order:
+
+   ```text
+   copilot plugin list
+   ~/.copilot/installed-plugins/
+   ~/.copilot/durable-ledger.json
+   ~/.copilot/state/durable-ledger/v1/namespaces/
+   ```
+
+The first `session-start` hook creates:
 
 ```text
-What directory should be my durable home base for the ledger?
-Open Copilot on this home directory every time so I can always see the ledger without asking for file permissions.
+workspaces.jsonl
+agents.jsonl
+threads.jsonl
+turns.jsonl
+events.jsonl
+distill_state.jsonl
+ledger_entries.jsonl
+ledger_entry_chunks.jsonl
+.runtime-state.json
 ```
 
-Then place the ledger under that home directory, not under an arbitrary transient project cwd.
+To verify the setup, confirm that `copilot plugin list` shows `durable-ledger`, then trigger a new session and check that the namespace directory exists and the files above are created.
 
 Good examples:
-- a dedicated agent home directory chosen by the user
-- a long-lived workspace root the user always opens first
+- the fixed Copilot-owned state directory under `~/.copilot/state/durable-ledger`
+- a user-level override in `~/.copilot/durable-ledger.json` when the default root or namespace needs adjustment
 
 Bad examples:
 - `/tmp/...`
-- a throwaway checkout
-- whichever repo happened to be open during first install
+- a throwaway checkout as the storage root
+- asking the user to choose a home directory for ordinary Copilot CLI use
 
 ## Configuration Pattern
 
@@ -113,7 +168,7 @@ Do not configure multiple ledger roots for the same live harness unless the user
 | Harness is unresolved | Run [../sanity-orientation/SKILL.md](../sanity-orientation/SKILL.md) first |
 | Harness is Hermes | Start from [references/hermes-plugin](references/hermes-plugin) |
 | Harness is OpenClaw | Start from [references/openclaw-plugin](references/openclaw-plugin) |
-| Harness is Copilot CLI | Start from [references/copilot-cli-plugin](references/copilot-cli-plugin) and ask for a durable home directory |
+| Harness is Copilot CLI | Start from [references/copilot-cli-plugin](references/copilot-cli-plugin) and check `~/.copilot` for an existing plugin install, config override, or ledger root |
 | Ledger already exists | Repair or extend it instead of creating a parallel ledger |
 
 ## Common Mistakes
@@ -122,16 +177,6 @@ Do not configure multiple ledger roots for the same live harness unless the user
 |--------|-------------|
 | Picking a plugin before resolving the harness | Use [../sanity-orientation/SKILL.md](../sanity-orientation/SKILL.md) first |
 | Treating GitHub Copilot in VS Code as automatically equivalent to Copilot CLI | Distinguish editor-hosted Copilot from Copilot CLI |
-| Using the current cwd as the ledger root for Copilot CLI without checking | Ask the user for a stable home directory |
+| Using the current cwd itself as the ledger root for Copilot CLI | Use the fixed root under `~/.copilot/state/durable-ledger` |
 | Creating a second ledger beside an existing one | Repair or adopt the existing ledger |
-| Choosing a storage path the agent cannot reliably reopen later | Prefer harness-owned state or a user-designated durable home |
-
-## Worked Prompt
-
-When Copilot CLI needs a ledger root, ask plainly:
-
-```text
-I need one stable home directory for the durable ledger.
-What directory should I use as my home base?
-Open Copilot on this home directory every time so I can always see the ledger without asking for file permissions.
-```
+| Choosing a storage path the agent cannot reliably reopen later | Prefer harness-owned state or a user-level Copilot override |

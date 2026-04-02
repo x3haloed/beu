@@ -1,6 +1,6 @@
 ---
 name: sanity-orientation
-description: Use when an agent must establish what harness it is running inside before choosing bootstrap files, memory surfaces, or self-modification paths.
+description: Use when an agent must establish what harness it is running inside, whether a durable ledger already exists, or where continuity artifacts should live before self-modification.
 ---
 
 # Sanity Orientation
@@ -11,9 +11,11 @@ Before building state for yourself, identify the container you are inside.
 
 **Core principle:** Resolve the harness from observable evidence, not from assumptions or a single convenient clue.
 
-This first primitive answers only one question:
+This skill currently answers two questions:
 
 **What agent harness is this?**
+
+**Do I already have a durable ledger?**
 
 This skill is about runtime identity, not repo preference. A machine can contain traces of several frameworks at once. The goal is to identify the one that is actually shaping the current session.
 
@@ -27,6 +29,10 @@ This skill is about runtime identity, not repo preference. A machine can contain
 - Coordination between multiple agents does not merge identities. Each agent must resolve its own harness from its own live session evidence.
 - A bootstrap file can inform the expected surface, but the live session always wins when they disagree.
 - If the evidence only identifies the editor host, report the editor host and keep `harness_id` separate.
+- Durable ledger is not the same as "persistent memory." A notes store that can be overwritten is useful, but it is not automatically a ledger.
+- A summary file such as `STATE.md`, `WAKE.md`, or `CIL.md` is not itself the ledger unless it also preserves chronological source history.
+- Compression artifacts are derived state. The ledger is the substrate they are derived from.
+- Git history is useful evidence, but it is not a general agent ledger for instructions, tool outputs, and decisions unless the system explicitly treats commits as that ledger.
 
 ## When to Use
 
@@ -265,4 +271,169 @@ bootstrap_surface: .github/copilot-instructions.md
 conflicts:
 - none
 notes: home-directory checks are non-authoritative because multiple harness traces can coexist
+```
+
+## Durable Ledger
+
+Before building continuity, determine whether there is already a persistent substrate you can compress from.
+
+**Core principle:** A durable ledger must survive resets and preserve enough chronology and provenance to reconstruct what happened later.
+
+A ledger is durable enough when all of these are true:
+- It survives session or process resets.
+- A future agent instance can read it again.
+- It preserves append order, timestamps, or another trustworthy event sequence.
+- Corrections are additive or auditable rather than silent overwrites.
+- It can carry evidence pointers, source ids, or concrete provenance.
+
+If one of those is missing, do not overclaim. Report the gap.
+
+### Durable Ledger Output Contract
+
+Return the result in this structure:
+
+```text
+ledger_status: present | repairable | absent | ambiguous
+ledger_kind: isnad-chains | work-board-jsonl | harness-transcript | harness-memory | custom-append-only | none | ambiguous
+durability: high | medium | low
+compression_ready: yes | partial | no
+paths_or_surface:
+- <path or surface>
+evidence:
+- <short fact>
+gaps:
+- <missing property or "none">
+notes: <caveat or next probe>
+```
+
+Output rules:
+- `present` means there is already a usable chronological substrate.
+- `repairable` means there is a durable substrate, but one missing piece blocks immediate compression.
+- `absent` means no durable chronological substrate was found.
+- `ambiguous` means you cannot verify persistence or sequence strongly enough.
+
+### Detection Order For Durable Ledger
+
+Resolve in this order:
+
+1. Repo-local append-only ledgers and chain systems
+2. Harness-native transcript or memory surfaces with stable replay
+3. Derived state or summaries that point back to a real ledger
+4. Generic persistent notes or mutable memory stores
+
+Start with repo-local evidence because it is inspectable, portable, and under agent control.
+
+### What Counts As A Durable Ledger
+
+High-confidence ledger forms:
+- `.isnad/ledger.jsonl` and `.isnad/control.jsonl` with append-only semantics
+- isnad markdown chains that are explicitly append-only
+- a repo-local custom log with stable ids and additive corrections
+- a harness transcript API that exposes durable chronological history with stable ids and later re-read access
+
+Medium-confidence forms:
+- harness memory that survives resets and preserves chronology, but is mutable or only partially auditable
+- a repo-local log that is persistent and chronological but lacks explicit correction protocol
+
+Not a ledger by itself:
+- `AGENTS.md`, `SKILL.md`, `IDENTITY.md`, `TOOLS.md`
+- `STATE.md`, `WAKE.md`, `CIL.md`, or any other summary-only artifact
+- vector indexes, embeddings, or search indexes without source history
+- ephemeral session memory
+- generic user memory notes that can be edited or replaced silently
+- git history alone
+
+### Procedure
+
+#### 1. Check for repo-native ledger structures
+
+Look for the strongest forms first:
+- `.isnad/ledger.jsonl`
+- `.isnad/control.jsonl`
+- `CIL.md` plus a `cil_paths` header pointing to isnads or chains
+- `isnads/`, `chains/`, or another append-only chain directory
+- custom append-only logs with record ids and evidence fields
+
+Interpretation rules:
+- `CIL.md` without source chains is not enough. It is compiled state, not the ledger.
+- `.isnad/state/*` is derived state, not the ledger.
+- If the ledger exists but a derived file is missing, the ledger is still present.
+
+#### 2. Check for harness-native replayable history
+
+Some harnesses provide persistence, but persistence alone is not enough.
+
+Ask:
+- Can a future session read the same history again?
+- Are entries chronological?
+- Do entries have stable ids, timestamps, or citations?
+- Can corrections be traced, or does the system silently rewrite?
+
+If the answer is "persistent but mutable notes only," classify it as support, not a durable ledger.
+
+#### 3. Separate memory from ledger
+
+Use this rule:
+
+- Memory answers "what should I remember?"
+- Ledger answers "what happened, in what order, and why do I believe it?"
+
+If the surface cannot answer the second question, it is not yet a durable ledger.
+
+#### 4. Determine compression readiness
+
+Set `compression_ready` to:
+- `yes` when the substrate is durable, chronological, and readable now
+- `partial` when the substrate exists but needs one repair step or wrapper
+- `no` when there is nothing reliable to compress from
+
+Typical `repairable` examples:
+- `CIL.md` exists but the isnad path is missing
+- append-only chains exist but no stable convention identifies active vs superseded records
+- harness transcript exists but needs export into a repo-local append-only format before safe compaction
+
+## Durable Ledger Quick Reference
+
+| Signal | Weight | Meaning |
+|-------|--------|---------|
+| `.isnad/ledger.jsonl` plus append-only contract | High | Durable ledger present |
+| isnad chains with append-only history | High | Durable ledger present |
+| `CIL.md` with valid source chains | Medium | Strong evidence for an underlying ledger |
+| replayable harness transcript with stable ids | Medium | May be enough if chronology and access are real |
+| mutable harness memory notes | Low | Useful memory surface, not sufficient ledger by itself |
+| summary file with no source history | Low | Derived state only |
+
+## Durable Ledger Reference
+
+See [references/durable-ledger-signals.md](references/durable-ledger-signals.md) for the signal matrix and a verified example.
+
+## Durable Ledger Common Mistakes
+
+| Mistake | Better move |
+|--------|-------------|
+| Treating any persistent memory as a ledger | Check chronology, replay, and auditability explicitly |
+| Treating `CIL.md` as the ledger | Follow `cil_paths` or `src` back to the source chains |
+| Treating a summary file as sufficient for compression | Require source history, not just current state |
+| Calling mutable notes durable because they survive resets | Ask whether silent overwrite destroys provenance |
+| Ignoring repo-local append-only logs because the harness has memory | Prefer the inspectable ledger under your control |
+
+## Durable Ledger Worked Result Pattern
+
+For a repo with no local ledger but some harness memory, say so plainly:
+
+```text
+ledger_status: absent
+ledger_kind: none
+durability: low
+compression_ready: no
+paths_or_surface:
+- harness memory scopes only
+evidence:
+- no `.isnad/` ledger or control files were found
+- no `CIL.md` or chain directory was found
+- the current harness exposes persistent memory notes, but those notes are mutable rather than append-only
+gaps:
+- no chronological append-only evidence plane
+- no repo-local source history for future compression
+notes: memory is available as a support surface, but a durable ledger still needs to be created
 ```

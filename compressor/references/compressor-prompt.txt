@@ -23,6 +23,8 @@ These usually do not belong in the invariant set:
 - preferences or instructions
 - relationship framing
 - narrative or history
+- inventories, examples, or catalogs of remembered content
+- project status snapshots, current activity reports, or roadmap/prototype descriptions unless they are clearly stable constraints
 
 An invariant describes the system, not an agent.
 
@@ -47,7 +49,7 @@ STEP 2 — DESCRIBE THE CHANGE
 
 Compare the previous invariants with the current ones.
 
-- If something from active_invariants no longer belongs, list it in invariant_removes
+- If something from the prior invariant set no longer belongs, list it in invariant_removes
 - If something new is now part of the state, list it in invariant_adds
 - Prefer preserving existing constraints unless there is a clear reason to change them.
 
@@ -57,7 +59,7 @@ When a constraint changes form, it often appears as:
 
 Try to represent the change clearly.
 
-When listing invariant_removes, refer only to items from active_invariants. Do not remove or edit text from the conversation.
+When listing invariant_removes, refer only to items from the prior invariant set. Do not remove or edit text from the conversation.
 
 ---
 
@@ -79,6 +81,56 @@ Additional runtime inputs will be provided after this prompt:
 2) a chunk of unprocessed ledger events
 
 Use both inputs when producing the next wake_pack.
+
+Treat previous_wake_pack as the canonical prior invariant set.
+
+- Start from previous_wake_pack, not from an empty state
+- Interpret previous_wake_pack as candidate prior invariants, not as guaranteed-correct text
+- Preserve prior invariants unless the new messages clearly falsify them
+- Lack of mention is not evidence of removal
+- An unrelated conversation chunk should usually cause no change
+- If previous_wake_pack contains narrative, instructions, dialogue, or other non-invariants, do not preserve that material as invariants
+
+When deciding removals:
+
+- Remove a prior invariant only if the new messages clearly contradict it
+- Do not remove a prior invariant just because the current chunk discusses something else
+- Do not remove a prior invariant merely because it is absent from the new messages
+- If a prior item is not actually an invariant, you may omit it from the resulting invariant set
+
+When deciding additions:
+
+- Add a new invariant only if the new messages clearly reveal a durable system constraint
+- If you are unsure whether something is durable, do not add it
+- Do not add ephemeral observations from a single turn as invariants
+- Tool availability, harness capabilities, and current access surfaces are usually too session-local unless the messages clearly show they are stable system constraints
+- A one-turn report about what tools are available right now is usually not enough to add a new invariant
+- Do not preserve lists of examples or domains as invariants just because they demonstrate that something exists
+- Do not preserve project momentum, current prototype targets, or active-work summaries unless they function as true constraints on the system
+
+When deciding wake_pack emission:
+
+- If invariant_adds and invariant_removes are both empty, wake_pack must be an empty string
+- If either list is non-empty, wake_pack must contain the full invariant set after the update
+- Do not restate an unchanged invariant set in wake_pack
+- wake_pack is a patch-triggered publication, not a standing copy of previous_wake_pack
+
+Output requirements are strict:
+
+- Return only one JSON object
+- Do not wrap it in markdown fences
+- Do not add commentary before or after the JSON
+- Use exactly these keys: invariant_adds, invariant_removes, wake_pack
+- invariant_adds must be an array of strings
+- invariant_removes must be an array of strings
+- wake_pack must be a string
+- wake_pack must never be an array, object, or null
+- When invariants remain after an update, serialize the full resulting invariant set into one plain string
+- If there are multiple resulting invariants, join them into a compact text block inside the single wake_pack string
+- If there are no additions or removals, return:
+  {"invariant_adds":[],"invariant_removes":[],"wake_pack":""}
+- Example non-empty output:
+  {"invariant_adds":["A"],"invariant_removes":["B"],"wake_pack":"A\nC"}
 
 ---
 

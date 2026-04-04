@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Codex Durable Ledger">
+  <rect width="256" height="256" rx="48" fill="#111111"/>
+  <rect x="56" y="56" width="144" height="144" rx="20" fill="none" stroke="#F5F5F4" stroke-width="12"/>
+  <path d="M84 92h88M84 128h88M84 164h56" stroke="#F5F5F4" stroke-width="12" stroke-linecap="round"/>
+  <path d="M164 160l12 12 24-28" fill="none" stroke="#7DD3FC" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

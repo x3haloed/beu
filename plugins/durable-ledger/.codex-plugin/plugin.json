@@ -1,0 +1,44 @@
+{
+  "name": "durable-ledger",
+  "version": "0.1.0",
+  "description": "Codex-native durable ledger and wake-pack loop for stable session framing.",
+  "skills": "./skills",
+  "author": {
+    "name": "Chad Kirby",
+    "email": "chadjkirby@icloud.com",
+    "url": "https://github.com/x3haloed"
+  },
+  "homepage": "https://github.com/x3haloed/beu",
+  "repository": "https://github.com/x3haloed/beu",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "ledger",
+    "wake-pack",
+    "compression",
+    "jsonl"
+  ],
+  "hooks": "./hooks.json",
+  "interface": {
+    "displayName": "Codex Durable Ledger",
+    "shortDescription": "Load, compress, and reinject a durable ledger at session start",
+    "longDescription": "A Codex-native reference plugin for stable-frame workflows: resolve the active harness, attach to the durable ledger, compress the ledger into a wake pack, and inject that wake pack at session start.",
+    "developerName": "Chad Kirby",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/x3haloed/beu",
+    "privacyPolicyURL": "https://github.com/x3haloed/beu",
+    "termsOfServiceURL": "https://github.com/x3haloed/beu",
+    "defaultPrompt": [
+      "Start by reading the current wake pack for this workspace, then continue from the latest local physics."
+    ],
+    "brandColor": "#111111",
+    "composerIcon": "./assets/codex-ledger.svg",
+    "logo": "./assets/codex-ledger.svg",
+    "screenshots": []
+  }
+}

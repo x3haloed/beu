@@ -77,18 +77,23 @@ If no invariants remain, wake_pack is an empty string.
 
 Additional runtime inputs will be provided after this prompt:
 
-1) the previous wake_pack, if any
+1) the two most recent wake_packs, if any
 2) a chunk of unprocessed ledger events
 
 Use both inputs when producing the next wake_pack.
+Treat the unprocessed ledger events as the newest delta, not the full history.
 
-Treat previous_wake_pack as the canonical prior invariant set.
+Treat the most recent wake_pack as the canonical prior invariant set, and use the second most recent wake_pack as continuity context.
 
 - Start from previous_wake_pack, not from an empty state
 - Interpret previous_wake_pack as candidate prior invariants, not as guaranteed-correct text
-- Preserve prior invariants unless the new messages clearly falsify them
+- Preserve prior invariants unless the new chunk clearly contradicts them.
+- If previous_wake_pack is non-empty and the new chunk does not clearly contradict it, do not collapse to an empty wake_pack.
+- Treat each line in previous_wake_pack as live unless the new chunk clearly contradicts it.
+- If the current chunk is unrelated, copy previous_wake_pack forward unchanged.
 - Lack of mention is not evidence of removal
-- An unrelated conversation chunk should usually cause no change
+- An unrelated chunk should usually cause no change
+- An unrelated chunk should usually cause no change.
 - If previous_wake_pack contains narrative, instructions, dialogue, or other non-invariants, do not preserve that material as invariants
 
 When deciding removals:

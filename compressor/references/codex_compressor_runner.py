@@ -157,13 +157,31 @@ def _load_state(path: Path) -> dict[str, Any]:
     return loaded
 
 
-def _latest_wake_pack(history_path: Path) -> str:
-    latest = ""
+def _wake_pack_body(wake_pack: str) -> str:
+    text = wake_pack.strip()
+    if text.startswith(WAKE_PACK_OPEN_TAG) and text.endswith(WAKE_PACK_CLOSE_TAG):
+        text = text[len(WAKE_PACK_OPEN_TAG) : -len(WAKE_PACK_CLOSE_TAG)].strip()
+    return text
+
+
+def _is_empty_equivalent_wake_pack(wake_pack: str) -> bool:
+    return _wake_pack_body(wake_pack) in {"", "{}"}
+
+
+def _latest_wake_packs(history_path: Path, limit: int = 2) -> list[str]:
+    latest: list[str] = []
     for record in _iter_jsonl(history_path):
         wake_pack = record.get("wake_pack")
         if isinstance(wake_pack, str):
-            latest = wake_pack
-    return latest
+            latest.append(wake_pack)
+    if limit <= 0:
+        return []
+    return latest[-limit:]
+
+
+def _latest_wake_pack(history_path: Path) -> str:
+    packs = _latest_wake_packs(history_path, limit=1)
+    return packs[0] if packs else ""
 
 
 def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
@@ -173,13 +191,18 @@ def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
         handle.write("\n")
 
 
-def _build_prompt(template: str, previous_wake_pack: str, event_chunk: list[dict[str, Any]]) -> str:
+def _build_prompt(template: str, previous_wake_packs: list[str], event_chunk: list[dict[str, Any]]) -> str:
     rendered_events = "\n".join(json.dumps(event, ensure_ascii=True, sort_keys=True) for event in event_chunk)
-    wake_pack_block = previous_wake_pack.strip() or "<empty>"
+    previous_blocks = []
+    for index in range(2):
+        wake_pack = previous_wake_packs[index].strip() if index < len(previous_wake_packs) else ""
+        previous_blocks.append((index + 1, wake_pack or "<empty>"))
     return (
         f"{template.rstrip()}\n\n"
-        "PREVIOUS_WAKE_PACK\n"
-        f"{wake_pack_block}\n\n"
+        "PREVIOUS_WAKE_PACK_1\n"
+        f"{previous_blocks[0][1]}\n\n"
+        "PREVIOUS_WAKE_PACK_2\n"
+        f"{previous_blocks[1][1]}\n\n"
         "UNPROCESSED_LEDGER_EVENTS_JSONL\n"
         f"{rendered_events}\n\n"
         "Return only JSON matching the OUTPUT schema.\n"
@@ -222,6 +245,11 @@ def _read_final_message(last_message_path: Path, fallback_stdout: str) -> str:
     if text:
         return text
     raise ValueError("Codex did not produce a final message")
+
+
+def _should_append_history(history_path: Path, wake_pack: str) -> bool:
+    latest_history = _latest_wake_pack(history_path)
+    return not (_is_empty_equivalent_wake_pack(latest_history) and _is_empty_equivalent_wake_pack(wake_pack))
 
 
 def main() -> int:
@@ -275,8 +303,8 @@ def main() -> int:
 
     event_chunk = remaining_events[:event_chunk_size]
     template = prompt_path.read_text(encoding="utf-8")
-    previous_wake_pack = _latest_wake_pack(history_path)
-    prompt_text = _build_prompt(template, previous_wake_pack, event_chunk)
+    previous_wake_packs = _latest_wake_packs(history_path, limit=2)
+    prompt_text = _build_prompt(template, previous_wake_packs, event_chunk)
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir_path = Path(temp_dir)
@@ -313,7 +341,8 @@ def main() -> int:
             "compressor_output": parsed_output,
         }
         _atomic_write(output_path, wrapped_wake_pack)
-        _append_jsonl(history_path, history_record)
+        if _should_append_history(history_path, wrapped_wake_pack):
+            _append_jsonl(history_path, history_record)
         _atomic_write(
             state_path,
             json.dumps({"last_processed_event_index": processed_end_index, "updated_at": _now()}, ensure_ascii=True, indent=2)

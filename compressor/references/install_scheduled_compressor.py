@@ -15,11 +15,26 @@ from xml.sax.saxutils import escape
 
 
 PROMPT_FILE_NAME = "compressor-prompt.txt"
-RUNNER_FILE_NAME = "copilot_compressor_runner.py"
-CONFIG_FILE_NAME = "copilot-compressor.json"
-LOG_FILE_NAME = "copilot-compressor.log"
-STATE_FILE_NAME = "compressor-state.json"
-WAKE_PACK_HISTORY_FILE_NAME = "wake-pack-history.jsonl"
+RUNNER_FILE_BY_BACKEND = {
+    "copilot": "copilot_compressor_runner.py",
+    "codex": "codex_compressor_runner.py",
+}
+CONFIG_FILE_BY_BACKEND = {
+    "copilot": "copilot-compressor.json",
+    "codex": "codex-compressor.json",
+}
+LOG_FILE_BY_BACKEND = {
+    "copilot": "copilot-compressor.log",
+    "codex": "codex-compressor.log",
+}
+STATE_FILE_BY_BACKEND = {
+    "copilot": "copilot-compressor-state.json",
+    "codex": "codex-compressor-state.json",
+}
+WAKE_PACK_HISTORY_FILE_BY_BACKEND = {
+    "copilot": "wake-pack-history.jsonl",
+    "codex": "wake-pack-history.jsonl",
+}
 
 
 def _slugify(path: Path) -> str:
@@ -33,6 +48,21 @@ def _detect_scheduler() -> str:
     if system == "windows":
         return "schtasks"
     return "cron"
+
+
+def _detect_backend(invocation_name: str, explicit_backend: str | None, *, source_dir: Path) -> str:
+    if explicit_backend and explicit_backend != "auto":
+        return explicit_backend
+    lowered = invocation_name.lower()
+    if "codex" in lowered:
+        return "codex"
+    if "copilot" in lowered:
+        return "copilot"
+    if (source_dir / RUNNER_FILE_BY_BACKEND["codex"]).is_file():
+        return "codex"
+    if (source_dir / RUNNER_FILE_BY_BACKEND["copilot"]).is_file():
+        return "copilot"
+    raise FileNotFoundError("Could not infer backend; missing both codex and copilot runner files")
 
 
 def _run(command: list[str], *, dry_run: bool) -> None:
@@ -192,38 +222,55 @@ def shlex_quote(value: str) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Install a scheduled Copilot compressor job")
-    parser.add_argument("--home-dir", required=True, help="Stable Copilot home directory containing .github/copilot-instructions.md")
+    parser = argparse.ArgumentParser(description="Install a scheduled compressor job")
+    parser.add_argument("--home-dir", required=True, help="Stable home directory used as the compressor working root")
     parser.add_argument(
         "--ledger-namespace-dir",
         required=True,
-        help="Path to the Copilot durable-ledger namespace directory containing events.jsonl",
+        help="Path to the durable-ledger namespace directory containing events.jsonl",
     )
     parser.add_argument("--interval-minutes", type=int, default=15, help="How often to run the compressor")
+    parser.add_argument(
+        "--backend",
+        choices=("auto", "codex", "copilot"),
+        default="auto",
+        help="Which compressor backend to install",
+    )
     parser.add_argument(
         "--scheduler",
         choices=("auto", "launchd", "cron", "schtasks"),
         default="auto",
         help="Scheduler backend to install",
     )
+    parser.add_argument("--codex-command", default="codex", help="Codex executable to invoke from the runner")
     parser.add_argument("--copilot-command", default="copilot", help="Copilot executable to invoke from the runner")
     parser.add_argument("--dry-run", action="store_true", help="Print actions without modifying the system")
     args = parser.parse_args()
 
     scheduler = _detect_scheduler() if args.scheduler == "auto" else args.scheduler
     source_dir = Path(__file__).resolve().parent
+    backend = _detect_backend(Path(sys.argv[0]).name, args.backend, source_dir=source_dir)
     home_dir = Path(args.home_dir).expanduser().resolve()
     install_dir = home_dir / ".beu" / "compressor"
     ledger_namespace_dir = Path(args.ledger_namespace_dir).expanduser().resolve()
     prompt_target = install_dir / PROMPT_FILE_NAME
-    runner_target = install_dir / RUNNER_FILE_NAME
-    config_target = install_dir / CONFIG_FILE_NAME
-    log_path = install_dir / LOG_FILE_NAME
-    state_path = install_dir / STATE_FILE_NAME
-    wake_pack_history_path = install_dir / WAKE_PACK_HISTORY_FILE_NAME
-    instructions_path = home_dir / ".github" / "copilot-instructions.md"
+    runner_file_name = RUNNER_FILE_BY_BACKEND[backend]
+    config_file_name = CONFIG_FILE_BY_BACKEND[backend]
+    log_file_name = LOG_FILE_BY_BACKEND[backend]
+    state_file_name = STATE_FILE_BY_BACKEND[backend]
+    history_file_name = WAKE_PACK_HISTORY_FILE_BY_BACKEND[backend]
+    runner_target = install_dir / runner_file_name
+    config_target = install_dir / config_file_name
+    log_path = install_dir / log_file_name
+    state_path = install_dir / state_file_name
+    wake_pack_history_path = install_dir / history_file_name
+    instructions_path = (
+        ledger_namespace_dir / "wake-pack.md"
+        if backend == "codex"
+        else home_dir / ".github" / "copilot-instructions.md"
+    )
     source_prompt = source_dir / PROMPT_FILE_NAME
-    source_runner = source_dir / RUNNER_FILE_NAME
+    source_runner = source_dir / runner_file_name
 
     if not source_prompt.is_file():
         raise FileNotFoundError(f"Missing prompt file: {source_prompt}")
@@ -234,9 +281,10 @@ def main() -> int:
 
     python_path = shutil.which("python3") or sys.executable
     slug = _slugify(home_dir)
-    label = f"com.beu.copilot-compressor.{slug}"
+    label = f"com.beu.{backend}-compressor.{slug}"
 
     config = {
+        "backend": backend,
         "homeDir": str(home_dir),
         "ledgerNamespaceDir": str(ledger_namespace_dir),
         "ledgerEventsPath": str(ledger_namespace_dir / "events.jsonl"),
@@ -246,7 +294,9 @@ def main() -> int:
         "statePath": str(state_path),
         "wakePackHistoryPath": str(wake_pack_history_path),
         "eventChunkSize": 50,
-        "copilotCommand": args.copilot_command,
+        ("codexCommand" if backend == "codex" else "copilotCommand"): (
+            args.codex_command if backend == "codex" else args.copilot_command
+        ),
     }
 
     _copy_file(source_prompt, prompt_target, dry_run=args.dry_run)
@@ -287,10 +337,10 @@ def main() -> int:
     else:
         raise ValueError(f"Unsupported scheduler: {scheduler}")
 
-    print(f"Installed Copilot compressor using {scheduler}")
+    print(f"Installed {backend.capitalize()} compressor using {scheduler}")
     print(f"Stable home: {home_dir}")
     print(f"Ledger namespace dir: {ledger_namespace_dir}")
-    print(f"Instructions path: {instructions_path}")
+    print(f"Final output path: {instructions_path}")
     print(f"Runner config: {config_target}")
     return 0
 

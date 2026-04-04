@@ -17,6 +17,8 @@ DEFAULT_EVENT_CHUNK_SIZE = 10
 DEFAULT_CODEX_HOME_DIR = Path("/tmp/codex-home")
 DEFAULT_CODEX_WORK_DIR_NAME = "work"
 DEFAULT_CODEX_AUTH_SOURCE = Path("/Users/chad/.codex/auth.json")
+WAKE_PACK_OPEN_TAG = "<wake_pack>"
+WAKE_PACK_CLOSE_TAG = "</wake_pack>"
 DEFAULT_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -194,9 +196,18 @@ def _extract_wake_pack(output_text: str) -> tuple[str, dict[str, Any] | None]:
         return text, None
     if isinstance(parsed, dict):
         wake_pack = parsed.get("wake_pack")
-        if isinstance(wake_pack, str) and wake_pack.strip():
-            return wake_pack.strip() + "\n", parsed
+        if isinstance(wake_pack, str):
+            return wake_pack + "\n", parsed
     return text + "\n", parsed if isinstance(parsed, dict) else None
+
+
+def _wrap_wake_pack(wake_pack: str) -> str:
+    text = wake_pack.strip()
+    if text.startswith(WAKE_PACK_OPEN_TAG) and text.endswith(WAKE_PACK_CLOSE_TAG):
+        return text + "\n"
+    if text:
+        return f"{WAKE_PACK_OPEN_TAG}\n{text}\n{WAKE_PACK_CLOSE_TAG}\n"
+    return f"{WAKE_PACK_OPEN_TAG}\n{WAKE_PACK_CLOSE_TAG}\n"
 
 
 def _read_final_message(last_message_path: Path, fallback_stdout: str) -> str:
@@ -290,17 +301,18 @@ def main() -> int:
 
         final_message = _read_final_message(last_message_path, result.stdout)
         wake_pack_text, parsed_output = _extract_wake_pack(final_message)
+        wrapped_wake_pack = _wrap_wake_pack(wake_pack_text)
         processed_end_index = start_index + len(event_chunk)
         history_record = {
             "ran_at": _now(),
             "event_index_start": start_index,
             "event_index_end": processed_end_index,
             "event_count": len(event_chunk),
-            "wake_pack": wake_pack_text.rstrip("\n"),
+            "wake_pack": wrapped_wake_pack.rstrip("\n"),
             "source_event_ids": [record.get("id") for record in event_chunk if isinstance(record.get("id"), str)],
             "compressor_output": parsed_output,
         }
-        _atomic_write(output_path, wake_pack_text)
+        _atomic_write(output_path, wrapped_wake_pack)
         _append_jsonl(history_path, history_record)
         _atomic_write(
             state_path,

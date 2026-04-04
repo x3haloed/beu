@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_EVENT_CHUNK_SIZE = 50
+DEFAULT_EVENT_CHUNK_SIZE = 10
 
 
 def _now() -> str:

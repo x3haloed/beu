@@ -222,14 +222,19 @@ def shlex_quote(value: str) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Install a scheduled compressor job")
-    parser.add_argument("--home-dir", required=True, help="Stable home directory used as the compressor working root")
+    parser = argparse.ArgumentParser(description="Install a scheduled compressor job with backend-specific isolation")
+    parser.add_argument(
+        "--home-dir",
+        required=True,
+        help="Stable home directory where the published compressor output should live",
+    )
     parser.add_argument(
         "--ledger-namespace-dir",
         required=True,
         help="Path to the durable-ledger namespace directory containing events.jsonl",
     )
     parser.add_argument("--interval-minutes", type=int, default=15, help="How often to run the compressor")
+    parser.add_argument("--event-chunk-size", type=int, default=10, help="How many ledger events to process per run")
     parser.add_argument(
         "--backend",
         choices=("auto", "codex", "copilot"),
@@ -243,6 +248,17 @@ def main() -> int:
         help="Scheduler backend to install",
     )
     parser.add_argument("--codex-command", default="codex", help="Codex executable to invoke from the runner")
+    parser.add_argument("--codex-model", default="gpt-5.4-mini", help="Codex model to use for compression runs")
+    parser.add_argument(
+        "--codex-home-dir",
+        default="/tmp/codex-home",
+        help="Isolated Codex home used only for scheduled Codex compressor runs",
+    )
+    parser.add_argument(
+        "--codex-auth-source",
+        default="/Users/chad/.codex/auth.json",
+        help="Codex auth file to symlink into the isolated home before codex exec starts",
+    )
     parser.add_argument("--copilot-command", default="copilot", help="Copilot executable to invoke from the runner")
     parser.add_argument("--dry-run", action="store_true", help="Print actions without modifying the system")
     args = parser.parse_args()
@@ -269,6 +285,9 @@ def main() -> int:
         if backend == "codex"
         else home_dir / ".github" / "copilot-instructions.md"
     )
+    codex_home_dir = Path(args.codex_home_dir).expanduser().resolve()
+    codex_work_dir = codex_home_dir / "work"
+    codex_auth_source = Path(args.codex_auth_source).expanduser().resolve()
     source_prompt = source_dir / PROMPT_FILE_NAME
     source_runner = source_dir / runner_file_name
 
@@ -293,11 +312,16 @@ def main() -> int:
         "logPath": str(log_path),
         "statePath": str(state_path),
         "wakePackHistoryPath": str(wake_pack_history_path),
-        "eventChunkSize": 50,
+        "eventChunkSize": args.event_chunk_size,
+        "codexHomeDir": str(codex_home_dir),
+        "codexWorkDir": str(codex_work_dir),
+        "codexAuthSource": str(codex_auth_source),
         ("codexCommand" if backend == "codex" else "copilotCommand"): (
             args.codex_command if backend == "codex" else args.copilot_command
         ),
     }
+    if backend == "codex":
+        config["codexModel"] = args.codex_model
 
     _copy_file(source_prompt, prompt_target, dry_run=args.dry_run)
     _copy_file(source_runner, runner_target, dry_run=args.dry_run)
@@ -339,8 +363,11 @@ def main() -> int:
 
     print(f"Installed {backend.capitalize()} compressor using {scheduler}")
     print(f"Stable home: {home_dir}")
+    if backend == "codex":
+        print(f"Isolated Codex home: {codex_home_dir}")
+        print(f"Codex auth source: {codex_auth_source}")
     print(f"Ledger namespace dir: {ledger_namespace_dir}")
-    print(f"Final output path: {instructions_path}")
+    print(f"Published output path: {instructions_path}")
     print(f"Runner config: {config_target}")
     return 0
 

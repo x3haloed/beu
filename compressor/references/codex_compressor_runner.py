@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -12,7 +13,10 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_EVENT_CHUNK_SIZE = 50
+DEFAULT_EVENT_CHUNK_SIZE = 10
+DEFAULT_CODEX_HOME_DIR = Path("/tmp/codex-home")
+DEFAULT_CODEX_WORK_DIR_NAME = "work"
+DEFAULT_CODEX_AUTH_SOURCE = Path("/Users/chad/.codex/auth.json")
 DEFAULT_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -50,13 +54,46 @@ def _write_temp_json(data: dict[str, Any], directory: Path, filename: str) -> Pa
     return path
 
 
+def _toml_basic_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def _ensure_codex_home(codex_home_dir: Path, *, model: str | None) -> Path:
+    codex_home_dir.mkdir(parents=True, exist_ok=True)
+    config_path = codex_home_dir / "config.toml"
+    if not config_path.exists() or config_path.read_text(encoding="utf-8").strip() == "":
+        default_model = model or "gpt-5.4-mini"
+        config_path.write_text(
+            "# Isolated Codex home for scheduled compressor runs.\n"
+            f"model = {_toml_basic_string(default_model)}\n",
+            encoding="utf-8",
+        )
+    work_dir = codex_home_dir / DEFAULT_CODEX_WORK_DIR_NAME
+    work_dir.mkdir(parents=True, exist_ok=True)
+    return work_dir
+
+
+def _ensure_symlink(source: Path, target: Path) -> None:
+    if not source.exists():
+        raise FileNotFoundError(f"Missing required source file: {source}")
+    if target.is_symlink():
+        if target.resolve() == source.resolve():
+            return
+        target.unlink()
+    elif target.exists():
+        target.unlink()
+    target.symlink_to(source)
+
+
 def _run_codex(
     codex_command: str,
     prompt_text: str,
     cwd: Path,
     *,
+    model: str | None,
     output_schema_path: Path,
     last_message_path: Path,
+    codex_home_dir: Path,
 ) -> subprocess.CompletedProcess[str]:
     command = [
         codex_command,
@@ -71,10 +108,13 @@ def _run_codex(
         str(cwd),
         "-",
     ]
+    if model:
+        command[1:1] = ["-m", model]
     return subprocess.run(
         command,
         input=prompt_text,
         cwd=str(cwd),
+        env={**os.environ, "CODEX_HOME": str(codex_home_dir)},
         capture_output=True,
         text=True,
         check=False,
@@ -182,6 +222,10 @@ def main() -> int:
     config = _load_config(config_path)
 
     home_dir = Path(str(config["homeDir"])).expanduser().resolve()
+    codex_home_dir = Path(str(config.get("codexHomeDir") or DEFAULT_CODEX_HOME_DIR)).expanduser().resolve()
+    codex_work_dir = Path(
+        str(config.get("codexWorkDir") or (codex_home_dir / DEFAULT_CODEX_WORK_DIR_NAME))
+    ).expanduser().resolve()
     prompt_path = Path(str(config["promptPath"])).expanduser().resolve()
     output_path = Path(str(config["outputPath"])).expanduser().resolve()
     log_path = Path(str(config["logPath"])).expanduser().resolve()
@@ -192,6 +236,9 @@ def main() -> int:
     codex_command = shutil.which(str(config.get("codexCommand") or "codex")) or str(
         config.get("codexCommand") or "codex"
     )
+    codex_model = str(config.get("codexModel") or "").strip() or None
+    codex_auth_source = Path(str(config.get("codexAuthSource") or DEFAULT_CODEX_AUTH_SOURCE)).expanduser().resolve()
+    codex_auth_target = codex_home_dir / "auth.json"
 
     state = _load_state(state_path)
     all_events = _iter_jsonl(ledger_events_path)
@@ -201,6 +248,10 @@ def main() -> int:
     record = {
         "ran_at": _now(),
         "home_dir": str(home_dir),
+        "codex_home_dir": str(codex_home_dir),
+        "codex_work_dir": str(codex_work_dir),
+        "codex_auth_source": str(codex_auth_source),
+        "codex_auth_target": str(codex_auth_target),
         "output_path": str(output_path),
         "ledger_events_path": str(ledger_events_path),
         "last_processed_event_index": start_index,
@@ -220,12 +271,16 @@ def main() -> int:
         temp_dir_path = Path(temp_dir)
         output_schema_path = _write_temp_json(DEFAULT_OUTPUT_SCHEMA, temp_dir_path, "output-schema.json")
         last_message_path = temp_dir_path / "last-message.json"
+        codex_work_dir = _ensure_codex_home(codex_home_dir, model=codex_model)
+        _ensure_symlink(codex_auth_source, codex_auth_target)
         result = _run_codex(
             codex_command,
             prompt_text,
-            home_dir,
+            codex_work_dir,
+            model=codex_model,
             output_schema_path=output_schema_path,
             last_message_path=last_message_path,
+            codex_home_dir=codex_home_dir,
         )
         record.update({"returncode": result.returncode, "stderr": result.stderr.strip()})
 

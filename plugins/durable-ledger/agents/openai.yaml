@@ -1,4 +1,0 @@
-interface:
-  display_name: "Codex Durable Ledger"
-  short_description: "Load the wake pack before continuing work"
-  default_prompt: "Before doing anything else, read the current durable ledger wake pack for this workspace. If it is missing, initialize the ledger and rebuild the wake pack from the source ledger. After meaningful file writes, refresh the ledger and wake pack before finalizing."

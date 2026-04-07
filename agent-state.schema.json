@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/state.schema.json",
+  "title": "AgentState",
+  "type": "object",
+  "additionalProperties": false,
+
+  "required": ["focus", "threads", "constraints", "recent", "next"],
+
+  "properties": {
+    "focus": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Current primary objective or direction"
+    },
+
+    "threads": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160
+      },
+      "maxItems": 8,
+      "uniqueItems": true,
+      "description": "Active parallel lines of work or thought"
+    },
+
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "maxItems": 8,
+      "uniqueItems": true,
+      "description": "Things that must remain true or cannot be violated"
+    },
+
+    "recent": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "maxItems": 5,
+      "description": "Most recent meaningful steps (ordered, newest last)"
+    },
+
+    "next": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160
+      },
+      "minItems": 1,
+      "maxItems": 5,
+      "description": "Immediate next actions"
+    }
+  }
+}

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Durable Ledger Installer"
-  short_description: "Install or refresh Codex hooks for the durable-ledger plugin"
+  display_name: "BeU Installer"
+  short_description: "Install or refresh Codex hooks for BeU"
   default_prompt: "Run the installer script, then verify ~/.codex/config.toml has [features] codex_hooks = true, and confirm ~/.codex/hooks.json points at the bundled durable-ledger hook script so hooks are actually active."

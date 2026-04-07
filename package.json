@@ -1,0 +1,30 @@
+{
+  "name": "beu",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "esbuild src/codex/beu-mcp.ts --bundle --platform=node --outfile=plugins/beu/beu-mcp.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/x3haloed/beu.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/x3haloed/beu/issues"
+  },
+  "homepage": "https://github.com/x3haloed/beu#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "esbuild": "^0.28.0",
+    "typescript": "^6.0.2"
+  }
+}

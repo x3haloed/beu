@@ -6,7 +6,7 @@
   "scripts": {
     "build:mcp": "esbuild src/beu-mcp.ts src/compute-agent-state.ts --bundle --platform=node --outdir=dist",
     "install:mcp": "npm run build:mcp && mkdir -p $HOME/.beu && cp dist/beu-mcp.js dist/compute-agent-state.js $HOME/.beu/",
-    "install:opencode": "mkdir -p $HOME/.config/opencode/plugins/beu-opencode && cp -R plugins/beu-opencode/. $HOME/.config/opencode/plugins/beu-opencode/",
+    "install:opencode": "mkdir -p $HOME/.config/opencode/plugins && cp plugins/beu-opencode/src/index.ts $HOME/.config/opencode/plugins/beu-opencode.ts",
     "test": "node --test"
   },
   "repository": {

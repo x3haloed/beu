@@ -1,6 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 export type StateDelta = {
   set_focus?: string;
@@ -27,6 +27,25 @@ type PendingState = {
   next?: string[];
 };
 
+type StringFieldSpec = {
+  kind: 'string';
+  minLength: number;
+  maxLength: number;
+  description: string;
+};
+
+type StringArrayFieldSpec = {
+  kind: 'string[]';
+  itemMinLength: number;
+  itemMaxLength: number;
+  description: string;
+  unique?: boolean;
+  minItems?: number;
+  maxItems?: number;
+};
+
+type StateDeltaFieldSpec = StringFieldSpec | StringArrayFieldSpec;
+
 export const DELTA_PATH = join(homedir(), '.beu', 'state', 'deltas.jsonl');
 export const CONTEXT_PREFIX = '[BEU STATE]';
 export const DELTA_TOOL_DESCRIPTION = `
@@ -45,14 +64,87 @@ CRITICAL:
 If failing to record this change would cause the next step to go in the wrong direction, you MUST call delta().
 `;
 
-export const STATE_DELTA_FIELD_DESCRIPTIONS = {
-  set_focus: 'Replace the current focus with a new one',
-  add_threads: 'Add new active threads',
-  remove_threads: 'Remove completed or irrelevant threads',
-  add_constraints: 'Add newly discovered constraints or invariants',
-  add_recent: 'Append recent meaningful steps (will be truncated in state)',
-  set_next: 'Replace next actions list',
+export const STATE_DELTA_FIELDS = {
+  set_focus: {
+    kind: 'string',
+    minLength: 1,
+    maxLength: 200,
+    description: 'Replace the current focus with a new one',
+  },
+  add_threads: {
+    kind: 'string[]',
+    itemMinLength: 1,
+    itemMaxLength: 160,
+    unique: true,
+    description: 'Add new active threads',
+  },
+  remove_threads: {
+    kind: 'string[]',
+    itemMinLength: 1,
+    itemMaxLength: 160,
+    unique: true,
+    description: 'Remove completed or irrelevant threads',
+  },
+  add_constraints: {
+    kind: 'string[]',
+    itemMinLength: 1,
+    itemMaxLength: 200,
+    unique: true,
+    description: 'Add newly discovered constraints or invariants',
+  },
+  add_recent: {
+    kind: 'string[]',
+    itemMinLength: 1,
+    itemMaxLength: 200,
+    maxItems: 5,
+    description: 'Append recent meaningful steps (will be truncated in state)',
+  },
+  set_next: {
+    kind: 'string[]',
+    itemMinLength: 1,
+    itemMaxLength: 160,
+    minItems: 1,
+    description: 'Replace next actions list',
+  },
 } as const;
+
+export const STATE_DELTA_FIELD_DESCRIPTIONS = Object.fromEntries(
+  Object.entries(STATE_DELTA_FIELDS).map(([key, spec]) => [key, spec.description])
+) as Record<keyof typeof STATE_DELTA_FIELDS, string>;
+
+export function createStateDeltaJsonSchemaProperties() {
+  return Object.fromEntries(
+    Object.entries(STATE_DELTA_FIELDS).map(([key, spec]) => {
+      if (spec.kind === 'string') {
+        return [
+          key,
+          {
+            type: 'string',
+            minLength: spec.minLength,
+            maxLength: spec.maxLength,
+            description: spec.description,
+          },
+        ];
+      }
+
+      return [
+        key,
+        {
+          type: 'array',
+          items: {
+            type: 'string',
+            minLength: spec.itemMinLength,
+            maxLength: spec.itemMaxLength,
+          },
+          ...(spec.unique ? { uniqueItems: true } : {}),
+          ...(typeof spec.minItems === 'number' ? { minItems: spec.minItems } : {}),
+          ...(typeof spec.maxItems === 'number' ? { maxItems: spec.maxItems } : {}),
+          description: spec.description,
+        },
+      ];
+    })
+  );
+}
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -114,14 +206,7 @@ export function validateStateDelta(value: unknown): string | null {
     return 'delta must include at least one property';
   }
 
-  const allowedKeys = new Set([
-    'set_focus',
-    'add_threads',
-    'remove_threads',
-    'add_constraints',
-    'add_recent',
-    'set_next',
-  ]);
+  const allowedKeys = new Set(Object.keys(STATE_DELTA_FIELDS));
 
   for (const key of keys) {
     if (!allowedKeys.has(key)) {
@@ -133,33 +218,48 @@ export function validateStateDelta(value: unknown): string | null {
     if (!isNonEmptyString(value.set_focus)) {
       return 'set_focus must be a non-empty string';
     }
-    if (value.set_focus.length > 200) {
-      return 'set_focus must be at most 200 characters long';
+    if (value.set_focus.length > STATE_DELTA_FIELDS.set_focus.maxLength) {
+      return `set_focus must be at most ${STATE_DELTA_FIELDS.set_focus.maxLength} characters long`;
     }
   }
 
   if ('add_threads' in value) {
-    const error = validateStringArray(value.add_threads, { unique: true, maxLength: 160 });
+    const error = validateStringArray(value.add_threads, {
+      unique: STATE_DELTA_FIELDS.add_threads.unique,
+      maxLength: STATE_DELTA_FIELDS.add_threads.itemMaxLength,
+    });
     if (error !== null) return `add_threads: ${error}`;
   }
 
   if ('remove_threads' in value) {
-    const error = validateStringArray(value.remove_threads, { unique: true, maxLength: 160 });
+    const error = validateStringArray(value.remove_threads, {
+      unique: STATE_DELTA_FIELDS.remove_threads.unique,
+      maxLength: STATE_DELTA_FIELDS.remove_threads.itemMaxLength,
+    });
     if (error !== null) return `remove_threads: ${error}`;
   }
 
   if ('add_constraints' in value) {
-    const error = validateStringArray(value.add_constraints, { unique: true, maxLength: 200 });
+    const error = validateStringArray(value.add_constraints, {
+      unique: STATE_DELTA_FIELDS.add_constraints.unique,
+      maxLength: STATE_DELTA_FIELDS.add_constraints.itemMaxLength,
+    });
     if (error !== null) return `add_constraints: ${error}`;
   }
 
   if ('add_recent' in value) {
-    const error = validateStringArray(value.add_recent, { maxItems: 5, maxLength: 200 });
+    const error = validateStringArray(value.add_recent, {
+      maxItems: STATE_DELTA_FIELDS.add_recent.maxItems,
+      maxLength: STATE_DELTA_FIELDS.add_recent.itemMaxLength,
+    });
     if (error !== null) return `add_recent: ${error}`;
   }
 
   if ('set_next' in value) {
-    const error = validateStringArray(value.set_next, { minItems: 1, maxLength: 160 });
+    const error = validateStringArray(value.set_next, {
+      minItems: STATE_DELTA_FIELDS.set_next.minItems,
+      maxLength: STATE_DELTA_FIELDS.set_next.itemMaxLength,
+    });
     if (error !== null) return `set_next: ${error}`;
   }
 
@@ -325,4 +425,17 @@ Otherwise, continue without calling it.
 
 export function normalizeDelta(value: StateDelta): StateDelta {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as StateDelta;
+}
+
+export async function appendStateDelta(delta: StateDelta, deltaPath: string = DELTA_PATH): Promise<string> {
+  const normalizedDelta = normalizeDelta(delta);
+  const validationError = validateStateDelta(normalizedDelta);
+
+  if (validationError !== null) {
+    throw new Error(validationError);
+  }
+
+  await mkdir(dirname(deltaPath), { recursive: true });
+  await appendFile(deltaPath, `${JSON.stringify(normalizedDelta)}\n`, 'utf8');
+  return deltaPath;
 }

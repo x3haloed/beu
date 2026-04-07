@@ -1,17 +1,35 @@
 import { tool, type Plugin } from '@opencode-ai/plugin';
-import { appendFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname } from 'node:path';
 import {
+  appendStateDelta,
   computeAgentState,
   DELTA_PATH,
   DELTA_TOOL_DESCRIPTION,
+  STATE_DELTA_FIELDS,
   STATE_DELTA_FIELD_DESCRIPTIONS,
   formatStateContext,
-  normalizeDelta,
   type StateDelta,
-  validateStateDelta,
 } from '../../../src/beu-state.js';
+
+function createOpenCodeDeltaArgs(schema: typeof tool.schema) {
+  return Object.fromEntries(
+    Object.entries(STATE_DELTA_FIELDS).map(([key, spec]) => {
+      if (spec.kind === 'string') {
+        return [key, schema.string().min(spec.minLength).max(spec.maxLength).optional().describe(spec.description)];
+      }
+
+      let field = schema.array(schema.string().min(spec.itemMinLength).max(spec.itemMaxLength));
+      if (typeof spec.maxItems === 'number') {
+        field = field.max(spec.maxItems);
+      }
+      if (typeof spec.minItems === 'number') {
+        field = field.min(spec.minItems);
+      }
+
+      return [key, field.optional().describe(spec.description)];
+    })
+  );
+}
 
 export const BeUPlugin: Plugin = async ({ client }) => {
   const injectedSessions = new Set<string>();
@@ -43,7 +61,7 @@ export const BeUPlugin: Plugin = async ({ client }) => {
           body: {
             service: 'beu-opencode',
             level: 'warn',
-            message: 'Failed to inject BEU state context',
+            message: 'Failed to inject BEU session-start-equivalent state context',
             extra: {
               error: error instanceof Error ? error.message : String(error),
             },
@@ -55,33 +73,18 @@ export const BeUPlugin: Plugin = async ({ client }) => {
     tool: {
       delta: tool({
         description: DELTA_TOOL_DESCRIPTION,
-        args: {
-          set_focus: tool.schema.string().min(1).max(200).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.set_focus),
-          add_threads: tool.schema.array(tool.schema.string().min(1).max(160)).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.add_threads),
-          remove_threads: tool.schema.array(tool.schema.string().min(1).max(160)).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.remove_threads),
-          add_constraints: tool.schema.array(tool.schema.string().min(1).max(200)).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.add_constraints),
-          add_recent: tool.schema.array(tool.schema.string().min(1).max(200)).max(5).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.add_recent),
-          set_next: tool.schema.array(tool.schema.string().min(1).max(160)).min(1).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.set_next),
-        },
+        args: createOpenCodeDeltaArgs(tool.schema),
         async execute(args, context) {
-          const delta = normalizeDelta(args as StateDelta);
-          const validationError = validateStateDelta(delta);
-
-          if (validationError !== null) {
-            throw new Error(validationError);
-          }
-
-          await mkdir(dirname(DELTA_PATH), { recursive: true });
-          await appendFile(DELTA_PATH, `${JSON.stringify(delta)}\n`, 'utf8');
+          const path = await appendStateDelta(args as StateDelta);
 
           context.metadata({
             title: 'State delta',
             metadata: {
-              path: DELTA_PATH,
+              path,
             },
           });
 
-          return `Appended delta to ${DELTA_PATH}`;
+          return `Appended delta to ${path}`;
         },
       }),
     },

@@ -12,14 +12,13 @@ The main job in this repo is not just making one plugin work. It is preserving p
 - Keep the `delta` tool semantics aligned across all plugin implementations.
 - Keep the persistent storage path aligned: `~/.beu/state/deltas.jsonl`.
 - Keep the reconstructed state semantics aligned with `agent-state.schema.json`.
-- Keep delta semantics aligned with `state-delta.schema.json`.
+- Keep delta semantics aligned with `src/beu-state.ts`.
 - Keep session-start context injection behavior aligned as closely as each host allows.
 - If one plugin must diverge because of host limitations, document the reason in the relevant plugin README and keep the user-visible behavior as close as possible.
 
 ## Canonical Files
 
 - `agent-state.schema.json`: authoritative final state shape.
-- `state-delta.schema.json`: authoritative delta shape.
 - `src/beu-state.ts`: canonical shared implementation for delta validation, state folding, injected state prompt text, and `delta` tool guidance.
 - `src/compute-agent-state.ts`: canonical state folding CLI for the MCP-backed integrations.
 - `src/beu-mcp.ts`: canonical MCP `delta` tool implementation for Codex and Copilot.
@@ -52,7 +51,6 @@ The main job in this repo is not just making one plugin work. It is preserving p
 - If you change delta fields, limits, validation, or semantics, update all relevant implementations together.
 - At minimum, review these files together when behavior changes:
   - `agent-state.schema.json`
-  - `state-delta.schema.json`
   - `src/beu-state.ts`
   - `src/beu-mcp.ts`
   - `src/compute-agent-state.ts`

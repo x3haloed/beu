@@ -1,26 +1,22 @@
 # BeU OpenCode Plugin
 
-BeU for OpenCode follows the same two-step pattern as the other plugins in this repo:
+OpenCode follows the same two-step BeU model as Codex and Copilot, but uses a native custom tool and a first-message injection path instead of MCP plus a real session-start hook.
 
-1. expose a `delta` tool that appends validated state deltas to `~/.beu/state/deltas.jsonl`
-2. inject the computed current state into model context when a session begins
+The canonical architecture, shared files, and validation commands are documented in the repo root [README](../../README.md).
 
-OpenCode does not expose a direct session-start prompt hook like Codex or Copilot. This plugin uses the same practical pattern as `opencode-supermemory`: it injects the computed state on the first user message seen in each session via `chat.message`.
+OpenCode does not expose a direct session-start prompt hook like Codex or Copilot. This plugin injects the computed state on the first user message seen in each session via `chat.message`, which is the OpenCode session-start equivalent.
 
 ## Install
 
 ### Local plugin
 
-Build a single-file plugin artifact and copy it into one of:
-
-- `~/.config/opencode/plugins/beu-opencode.js`
-- `.opencode/plugins/beu-opencode.js`
-
-From this repo root:
+From the repo root, build and install the single-file plugin artifact:
 
 ```bash
 npm run install:opencode
 ```
+
+That copies `dist/beu-opencode.js` into `~/.config/opencode/plugins/beu-opencode.js`.
 
 ### NPM config
 

@@ -1,52 +1,19 @@
-# BeU MCP Plugin
+# BeU Codex Plugin
 
-BeU is a two-step state system:
+Codex uses the shared BeU MCP server for the `delta` tool and a Codex `SessionStart` hook for state injection.
 
-1. expose a `delta` tool that records state changes
-2. compute current state from accumulated deltas on session start and inject it into model context
+The canonical architecture, shared files, and validation commands are documented in the repo root [README](../../README.md).
 
-The MCP server exposes one tool:
+## Codex-Specific Pieces
 
-- `delta`
-  - accepts a `state-delta.schema.json`-conformant object
-  - appends the delta as one JSON line to `~/.beu/state/deltas.jsonl`
+- `.codex-plugin/plugin.json`: Codex plugin manifest
+- `.mcp.json`: launches `node ./beu-mcp.js` over stdio
+- `beu-mcp.js`: installed MCP runtime copied to `~/.beu/beu-mcp.js`
 
-## Layout
+## Install Notes
 
-- `.codex-plugin/plugin.json`
-  - plugin manifest
-  - points Codex at the local MCP server config
+1. Build and install the MCP artifacts with `npm run install:mcp` from the repo root.
+2. Install or refresh the Codex `SessionStart` hook with `node .agents/skills/beu-installer/scripts/install_hooks.js`.
+3. Ensure `~/.codex/config.toml` contains `codex_hooks = true` under `[features]`.
 
-- `.mcp.json`
-  - MCP launch config
-  - starts `node ./beu-mcp.js` over stdio
-
-- `beu-mcp.ts`
-  - TypeScript source for the server
-  - keeps the protocol, validation, and append logic in one place
-
-- `compute-agent-state.ts`
-  - TypeScript CLI that folds `~/.beu/state/deltas.jsonl` into the current agent state
-  - prints plain JSON for hook-based context injection
-
-- `beu-mcp.js`
-  - checked-in runtime artifact for Node
-  - same behavior as the TS source, without a build step
-
-- `compute-agent-state.js`
-  - built Node runtime for session-start hooks
-
-## Behavior
-
-The server:
-
-1. Negotiates the MCP initialize handshake.
-2. Advertises a single `delta` tool with the schema embedded in the server.
-3. Validates each request locally.
-4. Appends valid deltas to `~/.beu/state/deltas.jsonl` and returns the write path.
-
-On session start, the installed hook runs `compute-agent-state.js`, which folds the accumulated deltas and returns the current state as developer-context text.
-
-## Notes
-
-The old durable-ledger hook surface is no longer the primary model. The current flow is delta capture plus session-start state reconstruction.
+That hook runs `~/.beu/compute-agent-state.js`, reads `~/.beu/state/deltas.jsonl`, and injects the reconstructed state as plain text context.

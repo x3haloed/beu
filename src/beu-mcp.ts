@@ -58,7 +58,7 @@ const STATE_DELTA_SCHEMA = {
   minProperties: 1
 };
 
-const DELTA_PATH = join(homedir(), '.codex', 'state', 'deltas.jsonl');
+const DELTA_PATH = join(homedir(), '.beu', 'state', 'deltas.jsonl');
 
 class BeuMcpServer {
   private server: Server;

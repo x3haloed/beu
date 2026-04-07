@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "esbuild src/beu-mcp.ts --bundle --platform=node --outfile=plugins/beu-codex/beu-mcp.js && cp plugins/beu-codex/beu-mcp.js plugins/beu-copilot-cli/beu-mcp.js"
+    "build": "esbuild src/beu-mcp.ts --bundle --platform=node --outfile=dist/beu-mcp.js",
+    "install": "cp dist/beu-mcp.js $HOME/.beu/beu-mcp.js"
   },
   "repository": {
     "type": "git",

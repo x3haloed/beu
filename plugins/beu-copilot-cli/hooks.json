@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+        {
+            "type": "command",
+            "bash": "if [ -f .beu/state/deltas.jsonl ]; then node \"$HOME/.beu/compute-agent-state.js\"; else printf ''; fi",
+            "powershell": "if (Test-Path .beu/state/deltas.jsonl) { node \"$HOME/.beu/compute-agent-state.js\" } else { Write-Output \"\" }",
+            "cwd": ".",
+            "timeoutSec": 10
+        }
+    ]
+  }
+}

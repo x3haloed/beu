@@ -7,9 +7,9 @@ const { spawn } = require('node:child_process');
 
 const CLI_PATH = join(__dirname, '..', 'dist', 'compute-agent-state.js');
 
-function runCli(cwd) {
+function runCli(cwd, deltaPath) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI_PATH], {
+    const child = spawn(process.execPath, [CLI_PATH, deltaPath], {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -64,7 +64,7 @@ test('computes the current agent state from accumulated deltas', async () => {
     'utf8'
   );
 
-  const result = await runCli(cwd);
+  const result = await runCli(cwd, deltaPath);
 
   assert.equal(result.code, 0, `stderr: ${result.stderr}`);
   assert.deepEqual(JSON.parse(result.stdout), {

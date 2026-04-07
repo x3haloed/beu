@@ -1,4 +1,4 @@
 interface:
   display_name: "BeU Installer"
   short_description: "Install or refresh Codex hooks for BeU"
-  default_prompt: "Run the installer script, then verify ~/.codex/config.toml has [features] codex_hooks = true, and confirm ~/.codex/hooks.json points at the bundled durable-ledger hook script so hooks are actually active."
+  default_prompt: "Run the installer script, then verify ~/.codex/config.toml has [features] codex_hooks = true, and confirm ~/.codex/hooks.json points at ~/.beu/compute-agent-state.js so SessionStart injects the computed state."

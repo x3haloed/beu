@@ -91,7 +91,7 @@ class BeuMcpServer {
       tools: [
         {
           name: 'delta',
-          description: 'Append a validated state delta to ~/.codex/state/deltas.jsonl',
+          description: 'Append a validated state delta to ~/.beu/state/deltas.jsonl',
           inputSchema: STATE_DELTA_SCHEMA,
         },
       ],

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 type StateDelta = {
@@ -28,7 +29,7 @@ type PendingState = {
   next?: string[];
 };
 
-const DEFAULT_DELTA_PATH = join('.beu', 'state', 'deltas.jsonl');
+const DEFAULT_DELTA_PATH = join(homedir(), '.beu', 'state', 'deltas.jsonl');
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

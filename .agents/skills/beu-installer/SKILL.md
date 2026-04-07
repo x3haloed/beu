@@ -1,5 +1,5 @@
 ---
-name: durable-ledger-installer
+name: beu-hook-installer
 description: Install or refresh the Codex session-start hook that injects the computed BEU agent state from ~/.beu/compute-agent-state.js into Codex context.
 ---
 
@@ -36,7 +36,7 @@ If that flag is missing, add it before you consider the install complete. The ho
 Use this skill when you need to:
 - activate session-start state injection after installing or reinstalling the plugin
 - repair a broken hook path after the installed `~/.beu` files moved or were refreshed
-- install the durable-ledger hooks into a different Codex config layer with `--target`
+- install the BEU hooks into a different Codex config layer with `--target`
 
 ## Workflow
 

@@ -20,9 +20,10 @@ The main job in this repo is not just making one plugin work. It is preserving p
 
 - `agent-state.schema.json`: authoritative final state shape.
 - `state-delta.schema.json`: authoritative delta shape.
+- `src/beu-state.ts`: canonical shared implementation for delta validation, state folding, injected state prompt text, and `delta` tool guidance.
 - `src/compute-agent-state.ts`: canonical state folding CLI for the MCP-backed integrations.
 - `src/beu-mcp.ts`: canonical MCP `delta` tool implementation for Codex and Copilot.
-- `plugins/beu-opencode/src/index.ts`: OpenCode-native implementation; keep its validation and folding logic in sync with the canonical MCP-backed behavior.
+- `plugins/beu-opencode/src/index.ts`: OpenCode-native wrapper around the shared BeU state logic.
 
 ## Host Oddities
 
@@ -52,6 +53,7 @@ The main job in this repo is not just making one plugin work. It is preserving p
 - At minimum, review these files together when behavior changes:
   - `agent-state.schema.json`
   - `state-delta.schema.json`
+  - `src/beu-state.ts`
   - `src/beu-mcp.ts`
   - `src/compute-agent-state.ts`
   - `plugins/beu-opencode/src/index.ts`
@@ -73,7 +75,8 @@ Before finishing behavior changes, verify the repo-level contract:
 ## Practical Guidance
 
 - Prefer shared semantics over host-specific cleverness.
-- When OpenCode duplicates logic that also exists in `src/compute-agent-state.ts`, treat parity as more important than deduplication.
+- Put shared state semantics in `src/beu-state.ts` first, then have each host wrapper consume that shared implementation where practical.
+- Treat host wrappers as thin adaptation layers; avoid re-implementing validation, folding, or prompt text inside individual plugins unless the host forces it.
 - When editing Codex integration details, remember that packaging, MCP wiring, and hook installation are three separate concerns.
 - When editing Copilot integration details, remember that hook stdout becomes injected context.
 - When editing OpenCode integration details, remember that first-message injection is standing in for true session-start behavior.

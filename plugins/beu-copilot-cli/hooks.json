@@ -4,8 +4,8 @@
     "sessionStart": [
         {
             "type": "command",
-            "bash": "if [ -f .beu/state/deltas.jsonl ]; then node \"$HOME/.beu/compute-agent-state.js\"; else printf ''; fi",
-            "powershell": "if (Test-Path .beu/state/deltas.jsonl) { node \"$HOME/.beu/compute-agent-state.js\" } else { Write-Output \"\" }",
+            "bash": "if [ -f \"$HOME/.beu/state/deltas.jsonl\" ]; then node \"$HOME/.beu/compute-agent-state.js\" \"$HOME/.beu/state/deltas.jsonl\"; else printf ''; fi",
+            "powershell": "if (Test-Path \"$HOME/.beu/state/deltas.jsonl\") { node \"$HOME/.beu/compute-agent-state.js\" \"$HOME/.beu/state/deltas.jsonl\" } else { Write-Output \"\" }",
             "cwd": ".",
             "timeoutSec": 10
         }

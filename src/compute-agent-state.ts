@@ -30,6 +30,7 @@ type PendingState = {
 };
 
 const DEFAULT_DELTA_PATH = join(homedir(), '.beu', 'state', 'deltas.jsonl');
+const CONTEXT_PREFIX = '[BEU STATE]';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -297,10 +298,37 @@ async function computeAgentState(deltaPath: string): Promise<AgentState> {
   return validateFinalState(state);
 }
 
+function formatStateContext(state: AgentState): string {
+  return `${CONTEXT_PREFIX}
+
+This is your current working state. You are CONTINUING from this state — not starting fresh.
+
+STATE:
+${JSON.stringify(state, null, 2)}
+
+You MUST maintain this state as you work.
+
+Call the delta tool IMMEDIATELY if any of the following become true:
+- The focus changes or sharpens
+- A new thread appears
+- A thread is resolved or irrelevant
+- A constraint is discovered
+- A meaningful step completes
+- The next actions change
+
+Do NOT call delta for minor reasoning or explanation.
+
+If failing to update this state would cause future steps to go in the wrong direction,
+you MUST call delta.
+
+Otherwise, continue without calling it.
+`;
+}
+
 async function main() {
   const inputPath = process.argv[2] ? resolve(process.argv[2]) : resolve(DEFAULT_DELTA_PATH);
   const state = await computeAgentState(inputPath);
-  process.stdout.write(`${JSON.stringify(state, null, 2)}\n`);
+  process.stdout.write(formatStateContext(state));
 }
 
 main().catch((error) => {

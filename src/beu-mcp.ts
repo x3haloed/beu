@@ -91,7 +91,21 @@ class BeuMcpServer {
       tools: [
         {
           name: 'delta',
-          description: 'Append a validated state delta to ~/.beu/state/deltas.jsonl',
+          description: `
+Persist a minimal state update when orientation changes.
+
+CALL THIS TOOL IMMEDIATELY if:
+- Focus changes or sharpens
+- A new thread appears or a thread is resolved
+- A constraint is discovered
+- A meaningful step completes
+- Next actions change
+
+DO NOT call for explanation or minor reasoning.
+
+CRITICAL:
+If failing to record this change would cause the next step to go in the wrong direction, you MUST call delta().
+`,
           inputSchema: STATE_DELTA_SCHEMA,
         },
       ],

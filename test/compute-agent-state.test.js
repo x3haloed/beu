@@ -67,17 +67,47 @@ test('computes the current agent state from accumulated deltas', async () => {
   const result = await runCli(cwd, deltaPath);
 
   assert.equal(result.code, 0, `stderr: ${result.stderr}`);
-  assert.deepEqual(JSON.parse(result.stdout), {
-    focus: 'Ship current state tool',
-    threads: ['verify folding', 'wire build'],
-    constraints: ['must stay schema-valid'],
-    recent: [
-      'implemented fold logic',
-      'trimmed recent list',
-      'validated state',
-      'verified output',
-      'documented usage',
-    ],
-    next: ['ship tool', 'use it from plugin'],
-  });
+  assert.equal(
+    result.stdout,
+    `[BEU STATE]
+
+This is your current working state. You are CONTINUING from this state — not starting fresh.
+
+STATE:
+${JSON.stringify(
+      {
+        focus: 'Ship current state tool',
+        threads: ['verify folding', 'wire build'],
+        constraints: ['must stay schema-valid'],
+        recent: [
+          'implemented fold logic',
+          'trimmed recent list',
+          'validated state',
+          'verified output',
+          'documented usage',
+        ],
+        next: ['ship tool', 'use it from plugin'],
+      },
+      null,
+      2
+    )}
+
+You MUST maintain this state as you work.
+
+Call the delta tool IMMEDIATELY if any of the following become true:
+- The focus changes or sharpens
+- A new thread appears
+- A thread is resolved or irrelevant
+- A constraint is discovered
+- A meaningful step completes
+- The next actions change
+
+Do NOT call delta for minor reasoning or explanation.
+
+If failing to update this state would cause future steps to go in the wrong direction,
+you MUST call delta.
+
+Otherwise, continue without calling it.
+`
+  );
 });

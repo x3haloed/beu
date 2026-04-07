@@ -289,7 +289,30 @@ async function computeAgentState(deltaPath: string): Promise<AgentState> {
 }
 
 function formatStateContext(state: AgentState): string {
-  return `${CONTEXT_PREFIX}\n${JSON.stringify(state, null, 2)}`;
+  return `${CONTEXT_PREFIX}
+
+This is your current working state. You are CONTINUING from this state — not starting fresh.
+
+STATE:
+${JSON.stringify(state, null, 2)}
+
+You MUST maintain this state as you work.
+
+Call the delta tool IMMEDIATELY if any of the following become true:
+- The focus changes or sharpens
+- A new thread appears
+- A thread is resolved or irrelevant
+- A constraint is discovered
+- A meaningful step completes
+- The next actions change
+
+Do NOT call delta for minor reasoning or explanation.
+
+If failing to update this state would cause future steps to go in the wrong direction,
+you MUST call delta.
+
+Otherwise, continue without calling it.
+`;
 }
 
 function normalizeDelta(value: StateDelta): StateDelta {
@@ -339,7 +362,21 @@ export const BeUPlugin: Plugin = async ({ client }) => {
 
     tool: {
       delta: tool({
-        description: 'Append a validated state delta to ~/.beu/state/deltas.jsonl',
+        description: `
+Persist a minimal state update when orientation changes.
+
+CALL THIS TOOL IMMEDIATELY if:
+- Focus changes or sharpens
+- A new thread appears or a thread is resolved
+- A constraint is discovered
+- A meaningful step completes
+- Next actions change
+
+DO NOT call for explanation or minor reasoning.
+
+CRITICAL:
+If failing to record this change would cause the next step to go in the wrong direction, you MUST call delta().
+`,
         args: {
           set_focus: tool.schema.string().min(1).max(200).optional().describe('Replace the current focus with a new one'),
           add_threads: tool.schema.array(tool.schema.string().min(1).max(160)).optional().describe('Add new active threads'),

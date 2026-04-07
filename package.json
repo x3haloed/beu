@@ -1,10 +1,10 @@
 {
   "name": "beu",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "esbuild src/codex/beu-mcp.ts --bundle --platform=node --outfile=plugins/beu/beu-mcp.js"
+    "build": "esbuild src/beu-mcp.ts --bundle --platform=node --outfile=plugins/beu-codex/beu-mcp.js && cp plugins/beu-codex/beu-mcp.js plugins/beu-copilot-cli/beu-mcp.js"
   },
   "repository": {
     "type": "git",

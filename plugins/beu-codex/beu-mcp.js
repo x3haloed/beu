@@ -6798,7 +6798,7 @@ var require_dist = __commonJS({
   }
 });
 
-// src/codex/beu-mcp.ts
+// src/beu-mcp.ts
 var import_promises = require("node:fs/promises");
 var import_node_os = require("node:os");
 var import_node_path = require("node:path");
@@ -20831,7 +20831,7 @@ var StdioServerTransport = class {
   }
 };
 
-// src/codex/beu-mcp.ts
+// src/beu-mcp.ts
 var SERVER_NAME = "beu";
 var SERVER_VERSION = "0.1.0";
 var STATE_DELTA_SCHEMA = {

@@ -5,8 +5,9 @@
   "main": "index.js",
   "scripts": {
     "build:mcp": "esbuild src/beu-mcp.ts src/compute-agent-state.ts --bundle --platform=node --outdir=dist",
+    "build:opencode": "esbuild plugins/beu-opencode/src/index.ts --bundle --platform=node --format=esm --outfile=dist/beu-opencode.js",
     "install:mcp": "npm run build:mcp && mkdir -p $HOME/.beu && cp dist/beu-mcp.js dist/compute-agent-state.js $HOME/.beu/",
-    "install:opencode": "mkdir -p $HOME/.config/opencode/plugins && cp plugins/beu-opencode/src/index.ts $HOME/.config/opencode/plugins/beu-opencode.ts",
+    "install:opencode": "npm run build:opencode && mkdir -p $HOME/.config/opencode/plugins && cp dist/beu-opencode.js $HOME/.config/opencode/plugins/beu-opencode.js",
     "test": "node --test"
   },
   "repository": {
@@ -26,6 +27,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@opencode-ai/plugin": "^1.3.17",
     "@types/node": "^25.5.2",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.2"

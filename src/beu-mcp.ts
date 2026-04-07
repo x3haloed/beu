@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { appendFile, mkdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -11,6 +10,14 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
+import {
+  DELTA_PATH,
+  DELTA_TOOL_DESCRIPTION,
+  STATE_DELTA_FIELD_DESCRIPTIONS,
+  isNonEmptyString,
+  isRecord,
+  validateStringArray,
+} from './beu-state.js';
 
 const SERVER_NAME = 'beu';
 const SERVER_VERSION = '0.1.0';
@@ -22,43 +29,41 @@ const STATE_DELTA_SCHEMA = {
     set_focus: {
       type: 'string',
       minLength: 1,
-      description: 'Replace the current focus with a new one'
+      description: STATE_DELTA_FIELD_DESCRIPTIONS.set_focus
     },
     add_threads: {
       type: 'array',
       items: { type: 'string', minLength: 1 },
       uniqueItems: true,
-      description: 'Add new active threads'
+      description: STATE_DELTA_FIELD_DESCRIPTIONS.add_threads
     },
     remove_threads: {
       type: 'array',
       items: { type: 'string', minLength: 1 },
       uniqueItems: true,
-      description: 'Remove completed or irrelevant threads'
+      description: STATE_DELTA_FIELD_DESCRIPTIONS.remove_threads
     },
     add_constraints: {
       type: 'array',
       items: { type: 'string', minLength: 1 },
       uniqueItems: true,
-      description: 'Add newly discovered constraints or invariants'
+      description: STATE_DELTA_FIELD_DESCRIPTIONS.add_constraints
     },
     add_recent: {
       type: 'array',
       items: { type: 'string', minLength: 1 },
       maxItems: 5,
-      description: 'Append recent meaningful steps (will be truncated in state)'
+      description: STATE_DELTA_FIELD_DESCRIPTIONS.add_recent
     },
     set_next: {
       type: 'array',
       items: { type: 'string', minLength: 1 },
       minItems: 1,
-      description: 'Replace next actions list'
+      description: STATE_DELTA_FIELD_DESCRIPTIONS.set_next
     }
   },
   minProperties: 1
 };
-
-const DELTA_PATH = join(homedir(), '.beu', 'state', 'deltas.jsonl');
 
 class BeuMcpServer {
   private server: Server;
@@ -91,21 +96,7 @@ class BeuMcpServer {
       tools: [
         {
           name: 'delta',
-          description: `
-Persist a minimal state update when orientation changes.
-
-CALL THIS TOOL IMMEDIATELY if:
-- Focus changes or sharpens
-- A new thread appears or a thread is resolved
-- A constraint is discovered
-- A meaningful step completes
-- Next actions change
-
-DO NOT call for explanation or minor reasoning.
-
-CRITICAL:
-If failing to record this change would cause the next step to go in the wrong direction, you MUST call delta().
-`,
+          description: DELTA_TOOL_DESCRIPTION,
           inputSchema: STATE_DELTA_SCHEMA,
         },
       ],
@@ -159,52 +150,8 @@ If failing to record this change would cause the next step to go in the wrong di
     });
   }
 
-  private isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === 'object' && value !== null && !Array.isArray(value);
-  }
-
-  private isNonEmptyString(value: unknown): value is string {
-    return typeof value === 'string' && value.length > 0;
-  }
-
-  private validateStringArray(
-    value: unknown,
-    options: {
-      unique?: boolean;
-      minItems?: number;
-      maxItems?: number;
-    }
-  ): string | null {
-    if (!Array.isArray(value)) {
-      return 'must be an array of strings';
-    }
-
-    if (typeof options.minItems === 'number' && value.length < options.minItems) {
-      return `must contain at least ${options.minItems} item${options.minItems === 1 ? '' : 's'}`;
-    }
-
-    if (typeof options.maxItems === 'number' && value.length > options.maxItems) {
-      return `must contain at most ${options.maxItems} item${options.maxItems === 1 ? '' : 's'}`;
-    }
-
-    const seen = new Set<string>();
-    for (const item of value) {
-      if (!this.isNonEmptyString(item)) {
-        return 'must contain only non-empty strings';
-      }
-      if (options.unique) {
-        if (seen.has(item)) {
-          return 'must not contain duplicate values';
-        }
-        seen.add(item);
-      }
-    }
-
-    return null;
-  }
-
   private validateStateDelta(value: unknown): string | null {
-    if (!this.isRecord(value) || Array.isArray(value)) {
+    if (!isRecord(value) || Array.isArray(value)) {
       return 'delta must be an object';
     }
 
@@ -219,32 +166,32 @@ If failing to record this change would cause the next step to go in the wrong di
       }
     }
 
-    if ('set_focus' in value && !this.isNonEmptyString(value.set_focus)) {
+    if ('set_focus' in value && !isNonEmptyString(value.set_focus)) {
       return 'set_focus must be a non-empty string';
     }
 
     if ('add_threads' in value) {
-      const error = this.validateStringArray(value.add_threads, { unique: true });
+      const error = validateStringArray(value.add_threads, { unique: true });
       if (error !== null) return `add_threads: ${error}`;
     }
 
     if ('remove_threads' in value) {
-      const error = this.validateStringArray(value.remove_threads, { unique: true });
+      const error = validateStringArray(value.remove_threads, { unique: true });
       if (error !== null) return `remove_threads: ${error}`;
     }
 
     if ('add_constraints' in value) {
-      const error = this.validateStringArray(value.add_constraints, { unique: true });
+      const error = validateStringArray(value.add_constraints, { unique: true });
       if (error !== null) return `add_constraints: ${error}`;
     }
 
     if ('add_recent' in value) {
-      const error = this.validateStringArray(value.add_recent, { maxItems: 5 });
+      const error = validateStringArray(value.add_recent, { maxItems: 5 });
       if (error !== null) return `add_recent: ${error}`;
     }
 
     if ('set_next' in value) {
-      const error = this.validateStringArray(value.set_next, { minItems: 1 });
+      const error = validateStringArray(value.set_next, { minItems: 1 });
       if (error !== null) return `set_next: ${error}`;
     }
 

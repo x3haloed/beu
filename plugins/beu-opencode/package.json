@@ -11,9 +11,6 @@
     "memory",
     "state"
   ],
-  "dependencies": {
-    "@opencode-ai/plugin": "^1.0.162"
-  },
   "opencode": {
     "type": "plugin",
     "hooks": [

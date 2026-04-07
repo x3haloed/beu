@@ -1,15 +1,8 @@
-import { tool, type Plugin } from '@opencode-ai/plugin';
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
-import {
-  DELTA_TOOL_DESCRIPTION,
-  STATE_DELTA_FIELD_DESCRIPTIONS,
-  formatStateContext,
-} from '../../../src/beu-state.js';
+import { join } from 'node:path';
 
-type StateDelta = {
+export type StateDelta = {
   set_focus?: string;
   add_threads?: string[];
   remove_threads?: string[];
@@ -18,7 +11,7 @@ type StateDelta = {
   set_next?: string[];
 };
 
-type AgentState = {
+export type AgentState = {
   focus: string;
   threads: string[];
   constraints: string[];
@@ -34,17 +27,42 @@ type PendingState = {
   next?: string[];
 };
 
-const DELTA_PATH = join(homedir(), '.beu', 'state', 'deltas.jsonl');
+export const DELTA_PATH = join(homedir(), '.beu', 'state', 'deltas.jsonl');
+export const CONTEXT_PREFIX = '[BEU STATE]';
+export const DELTA_TOOL_DESCRIPTION = `
+Persist a minimal state update when orientation changes.
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+CALL THIS TOOL IMMEDIATELY if:
+- Focus changes or sharpens
+- A new thread appears or a thread is resolved
+- A constraint is discovered
+- A meaningful step completes
+- Next actions change
+
+DO NOT call for explanation or minor reasoning.
+
+CRITICAL:
+If failing to record this change would cause the next step to go in the wrong direction, you MUST call delta().
+`;
+
+export const STATE_DELTA_FIELD_DESCRIPTIONS = {
+  set_focus: 'Replace the current focus with a new one',
+  add_threads: 'Add new active threads',
+  remove_threads: 'Remove completed or irrelevant threads',
+  add_constraints: 'Add newly discovered constraints or invariants',
+  add_recent: 'Append recent meaningful steps (will be truncated in state)',
+  set_next: 'Replace next actions list',
+} as const;
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isNonEmptyString(value: unknown): value is string {
+export function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-function validateStringArray(
+export function validateStringArray(
   value: unknown,
   options: {
     unique?: boolean;
@@ -86,7 +104,7 @@ function validateStringArray(
   return null;
 }
 
-function validateStateDelta(value: unknown): string | null {
+export function validateStateDelta(value: unknown): string | null {
   if (!isRecord(value)) {
     return 'delta must be an object';
   }
@@ -163,40 +181,26 @@ function appendUnique(existing: string[], additions: string[]): string[] {
 }
 
 function applyDelta(state: PendingState, delta: StateDelta): PendingState {
-  const nextState: PendingState = {
-    focus: state.focus,
-    threads: [...state.threads],
-    constraints: [...state.constraints],
-    recent: [...state.recent],
-    next: state.next ? [...state.next] : undefined,
+  return {
+    focus: delta.set_focus ?? state.focus,
+    threads:
+      delta.remove_threads !== undefined
+        ? appendUnique(state.threads, delta.add_threads ?? []).filter(
+            (thread) => !new Set(delta.remove_threads).has(thread)
+          )
+        : delta.add_threads !== undefined
+          ? appendUnique(state.threads, delta.add_threads)
+          : [...state.threads],
+    constraints:
+      delta.add_constraints !== undefined
+        ? appendUnique(state.constraints, delta.add_constraints)
+        : [...state.constraints],
+    recent:
+      delta.add_recent !== undefined
+        ? [...state.recent, ...delta.add_recent].slice(-5)
+        : [...state.recent],
+    next: delta.set_next !== undefined ? [...delta.set_next] : state.next ? [...state.next] : undefined,
   };
-
-  if (delta.set_focus !== undefined) {
-    nextState.focus = delta.set_focus;
-  }
-
-  if (delta.add_threads !== undefined) {
-    nextState.threads = appendUnique(nextState.threads, delta.add_threads);
-  }
-
-  if (delta.remove_threads !== undefined) {
-    const removals = new Set(delta.remove_threads);
-    nextState.threads = nextState.threads.filter((thread) => !removals.has(thread));
-  }
-
-  if (delta.add_constraints !== undefined) {
-    nextState.constraints = appendUnique(nextState.constraints, delta.add_constraints);
-  }
-
-  if (delta.add_recent !== undefined) {
-    nextState.recent = [...nextState.recent, ...delta.add_recent].slice(-5);
-  }
-
-  if (delta.set_next !== undefined) {
-    nextState.next = [...delta.set_next];
-  }
-
-  return nextState;
 }
 
 function validateFinalState(state: PendingState): AgentState {
@@ -256,7 +260,7 @@ function validateFinalState(state: PendingState): AgentState {
   };
 }
 
-async function computeAgentState(deltaPath: string): Promise<AgentState> {
+export async function computeAgentState(deltaPath: string): Promise<AgentState> {
   const fileContents = await readFile(deltaPath, 'utf8');
   const lines = fileContents.split(/\r?\n/);
 
@@ -292,83 +296,33 @@ async function computeAgentState(deltaPath: string): Promise<AgentState> {
   return validateFinalState(state);
 }
 
-function normalizeDelta(value: StateDelta): StateDelta {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, item]) => item !== undefined)
-  ) as StateDelta;
+export function formatStateContext(state: AgentState): string {
+  return `${CONTEXT_PREFIX}
+
+This is your current working state. You are CONTINUING from this state — not starting fresh.
+
+STATE:
+${JSON.stringify(state, null, 2)}
+
+You MUST maintain this state as you work.
+
+Call the delta tool IMMEDIATELY if any of the following become true:
+- The focus changes or sharpens
+- A new thread appears
+- A thread is resolved or irrelevant
+- A constraint is discovered
+- A meaningful step completes
+- The next actions change
+
+Do NOT call delta for minor reasoning or explanation.
+
+If failing to update this state would cause future steps to go in the wrong direction,
+you MUST call delta.
+
+Otherwise, continue without calling it.
+`;
 }
 
-export const BeUPlugin: Plugin = async ({ client }) => {
-  const injectedSessions = new Set<string>();
-
-  return {
-    'chat.message': async (input, output) => {
-      if (injectedSessions.has(input.sessionID)) {
-        return;
-      }
-
-      injectedSessions.add(input.sessionID);
-
-      if (!existsSync(DELTA_PATH)) {
-        return;
-      }
-
-      try {
-        const state = await computeAgentState(DELTA_PATH);
-        output.parts.unshift({
-          id: `prt_beu-state-${Date.now()}`,
-          sessionID: input.sessionID,
-          messageID: output.message.id,
-          type: 'text',
-          text: formatStateContext(state),
-          synthetic: true,
-        });
-      } catch (error) {
-        await client.app.log({
-          body: {
-            service: 'beu-opencode',
-            level: 'warn',
-            message: 'Failed to inject BEU state context',
-            extra: {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          },
-        });
-      }
-    },
-
-    tool: {
-      delta: tool({
-        description: DELTA_TOOL_DESCRIPTION,
-        args: {
-          set_focus: tool.schema.string().min(1).max(200).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.set_focus),
-          add_threads: tool.schema.array(tool.schema.string().min(1).max(160)).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.add_threads),
-          remove_threads: tool.schema.array(tool.schema.string().min(1).max(160)).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.remove_threads),
-          add_constraints: tool.schema.array(tool.schema.string().min(1).max(200)).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.add_constraints),
-          add_recent: tool.schema.array(tool.schema.string().min(1).max(200)).max(5).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.add_recent),
-          set_next: tool.schema.array(tool.schema.string().min(1).max(160)).min(1).optional().describe(STATE_DELTA_FIELD_DESCRIPTIONS.set_next),
-        },
-        async execute(args, context) {
-          const delta = normalizeDelta(args as StateDelta);
-          const validationError = validateStateDelta(delta);
-
-          if (validationError !== null) {
-            throw new Error(validationError);
-          }
-
-          await mkdir(dirname(DELTA_PATH), { recursive: true });
-          await appendFile(DELTA_PATH, `${JSON.stringify(delta)}\n`, 'utf8');
-
-          context.metadata({
-            title: 'State delta',
-            metadata: {
-              path: DELTA_PATH,
-            },
-          });
-
-          return `Appended delta to ${DELTA_PATH}`;
-        },
-      }),
-    },
-  };
-};
+export function normalizeDelta(value: StateDelta): StateDelta {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as StateDelta;
+}

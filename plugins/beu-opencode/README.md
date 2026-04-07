@@ -11,10 +11,16 @@ OpenCode does not expose a direct session-start prompt hook like Codex or Copilo
 
 ### Local plugin
 
-Copy or symlink this folder into one of:
+Build a single-file plugin artifact and copy it into one of:
 
-- `~/.config/opencode/plugins/beu-opencode`
-- `.opencode/plugins/beu-opencode`
+- `~/.config/opencode/plugins/beu-opencode.js`
+- `.opencode/plugins/beu-opencode.js`
+
+From this repo root:
+
+```bash
+npm run install:opencode
+```
 
 ### NPM config
 
@@ -32,6 +38,7 @@ If published as a package, add it to your OpenCode config:
 - Adds a native `delta` tool directly through OpenCode's plugin API.
 - Stores deltas in `~/.beu/state/deltas.jsonl`.
 - On the first message in a session, computes the current state from the accumulated deltas and injects it as synthetic context.
+- The installed OpenCode artifact is a single bundled file in `dist/beu-opencode.js`.
 
 ## Tool
 

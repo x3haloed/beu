@@ -11,6 +11,15 @@ export type StateDelta = {
   set_next?: string[];
 };
 
+export type LooseStateDelta = {
+  set_focus?: string;
+  add_threads?: string | string[];
+  remove_threads?: string | string[];
+  add_constraints?: string | string[];
+  add_recent?: string | string[];
+  set_next?: string | string[];
+};
+
 export type AgentState = {
   focus: string;
   threads: string[];
@@ -127,19 +136,29 @@ export function createStateDeltaJsonSchemaProperties() {
         ];
       }
 
+      const arraySpec = spec as StringArrayFieldSpec;
       return [
         key,
         {
-          type: 'array',
-          items: {
-            type: 'string',
-            minLength: spec.itemMinLength,
-            maxLength: spec.itemMaxLength,
-          },
-          ...(spec.unique ? { uniqueItems: true } : {}),
-          ...(typeof spec.minItems === 'number' ? { minItems: spec.minItems } : {}),
-          ...(typeof spec.maxItems === 'number' ? { maxItems: spec.maxItems } : {}),
-          description: spec.description,
+          anyOf: [
+            {
+              type: 'string',
+              minLength: arraySpec.itemMinLength,
+              maxLength: arraySpec.itemMaxLength,
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+                minLength: arraySpec.itemMinLength,
+                maxLength: arraySpec.itemMaxLength,
+              },
+              ...(arraySpec.unique ? { uniqueItems: true } : {}),
+              ...(typeof arraySpec.minItems === 'number' ? { minItems: arraySpec.minItems } : {}),
+              ...(typeof arraySpec.maxItems === 'number' ? { maxItems: arraySpec.maxItems } : {}),
+            },
+          ],
+          description: arraySpec.description,
         },
       ];
     })
@@ -197,11 +216,12 @@ export function validateStringArray(
 }
 
 export function validateStateDelta(value: unknown): string | null {
-  if (!isRecord(value)) {
+  const normalizedValue = normalizeDelta(value);
+  if (!isRecord(normalizedValue)) {
     return 'delta must be an object';
   }
 
-  const keys = Object.keys(value);
+  const keys = Object.keys(normalizedValue);
   if (keys.length === 0) {
     return 'delta must include at least one property';
   }
@@ -214,49 +234,49 @@ export function validateStateDelta(value: unknown): string | null {
     }
   }
 
-  if ('set_focus' in value) {
-    if (!isNonEmptyString(value.set_focus)) {
+  if ('set_focus' in normalizedValue) {
+    if (!isNonEmptyString(normalizedValue.set_focus)) {
       return 'set_focus must be a non-empty string';
     }
-    if (value.set_focus.length > STATE_DELTA_FIELDS.set_focus.maxLength) {
+    if (normalizedValue.set_focus.length > STATE_DELTA_FIELDS.set_focus.maxLength) {
       return `set_focus must be at most ${STATE_DELTA_FIELDS.set_focus.maxLength} characters long`;
     }
   }
 
-  if ('add_threads' in value) {
-    const error = validateStringArray(value.add_threads, {
+  if ('add_threads' in normalizedValue) {
+    const error = validateStringArray(normalizedValue.add_threads, {
       unique: STATE_DELTA_FIELDS.add_threads.unique,
       maxLength: STATE_DELTA_FIELDS.add_threads.itemMaxLength,
     });
     if (error !== null) return `add_threads: ${error}`;
   }
 
-  if ('remove_threads' in value) {
-    const error = validateStringArray(value.remove_threads, {
+  if ('remove_threads' in normalizedValue) {
+    const error = validateStringArray(normalizedValue.remove_threads, {
       unique: STATE_DELTA_FIELDS.remove_threads.unique,
       maxLength: STATE_DELTA_FIELDS.remove_threads.itemMaxLength,
     });
     if (error !== null) return `remove_threads: ${error}`;
   }
 
-  if ('add_constraints' in value) {
-    const error = validateStringArray(value.add_constraints, {
+  if ('add_constraints' in normalizedValue) {
+    const error = validateStringArray(normalizedValue.add_constraints, {
       unique: STATE_DELTA_FIELDS.add_constraints.unique,
       maxLength: STATE_DELTA_FIELDS.add_constraints.itemMaxLength,
     });
     if (error !== null) return `add_constraints: ${error}`;
   }
 
-  if ('add_recent' in value) {
-    const error = validateStringArray(value.add_recent, {
+  if ('add_recent' in normalizedValue) {
+    const error = validateStringArray(normalizedValue.add_recent, {
       maxItems: STATE_DELTA_FIELDS.add_recent.maxItems,
       maxLength: STATE_DELTA_FIELDS.add_recent.itemMaxLength,
     });
     if (error !== null) return `add_recent: ${error}`;
   }
 
-  if ('set_next' in value) {
-    const error = validateStringArray(value.set_next, {
+  if ('set_next' in normalizedValue) {
+    const error = validateStringArray(normalizedValue.set_next, {
       minItems: STATE_DELTA_FIELDS.set_next.minItems,
       maxLength: STATE_DELTA_FIELDS.set_next.itemMaxLength,
     });
@@ -385,12 +405,13 @@ export async function computeAgentState(deltaPath: string): Promise<AgentState> 
       );
     }
 
-    const validationError = validateStateDelta(parsed);
+    const normalizedDelta = normalizeDelta(parsed);
+    const validationError = validateStateDelta(normalizedDelta);
     if (validationError !== null) {
       throw new Error(`Invalid delta in ${deltaPath} at line ${index + 1}: ${validationError}`);
     }
 
-    state = applyDelta(state, parsed as StateDelta);
+    state = applyDelta(state, normalizedDelta);
   }
 
   return validateFinalState(state);
@@ -432,11 +453,29 @@ export function formatCodexSessionStartOutput(state: AgentState): string {
   });
 }
 
-export function normalizeDelta(value: StateDelta): StateDelta {
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as StateDelta;
+function normalizeStringArrayField(value: unknown): unknown {
+  return typeof value === 'string' ? [value] : value;
 }
 
-export async function appendStateDelta(delta: StateDelta, deltaPath: string = DELTA_PATH): Promise<string> {
+export function normalizeDelta(value: unknown): StateDelta {
+  if (!isRecord(value)) {
+    return value as StateDelta;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .map(([key, item]) => {
+        const spec = STATE_DELTA_FIELDS[key as keyof typeof STATE_DELTA_FIELDS];
+        if (spec?.kind === 'string[]') {
+          return [key, normalizeStringArrayField(item)];
+        }
+        return [key, item];
+      })
+  ) as StateDelta;
+}
+
+export async function appendStateDelta(delta: unknown, deltaPath: string = DELTA_PATH): Promise<string> {
   const normalizedDelta = normalizeDelta(delta);
   const validationError = validateStateDelta(normalizedDelta);
 

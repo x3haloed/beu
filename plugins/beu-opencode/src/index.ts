@@ -11,6 +11,15 @@ import {
   type StateDelta,
 } from '../../../src/beu-state.js';
 
+type OpenCodeArraySpec = {
+  kind: 'string[]';
+  itemMinLength: number;
+  itemMaxLength: number;
+  description: string;
+  minItems?: number;
+  maxItems?: number;
+};
+
 function createOpenCodeDeltaArgs(schema: typeof tool.schema) {
   return Object.fromEntries(
     Object.entries(STATE_DELTA_FIELDS).map(([key, spec]) => {
@@ -18,15 +27,18 @@ function createOpenCodeDeltaArgs(schema: typeof tool.schema) {
         return [key, schema.string().min(spec.minLength).max(spec.maxLength).optional().describe(spec.description)];
       }
 
-      let field = schema.array(schema.string().min(spec.itemMinLength).max(spec.itemMaxLength));
-      if (typeof spec.maxItems === 'number') {
-        field = field.max(spec.maxItems);
+      const arraySpec = spec as OpenCodeArraySpec;
+      const item = schema.string().min(arraySpec.itemMinLength).max(arraySpec.itemMaxLength);
+      let arrayField = schema.array(item);
+      if (typeof arraySpec.maxItems === 'number') {
+        arrayField = arrayField.max(arraySpec.maxItems);
       }
-      if (typeof spec.minItems === 'number') {
-        field = field.min(spec.minItems);
+      if (typeof arraySpec.minItems === 'number') {
+        arrayField = arrayField.min(arraySpec.minItems);
       }
 
-      return [key, field.optional().describe(spec.description)];
+      const field = schema.union([item, arrayField]);
+      return [key, field.optional().describe(arraySpec.description)];
     })
   );
 }

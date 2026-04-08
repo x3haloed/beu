@@ -18,7 +18,7 @@ await build({
   outfile: bundledModulePath,
 });
 
-const { appendStateDelta, computeAgentState, validateStateDelta } = await import(pathToFileURL(bundledModulePath).href);
+const { appendStateDelta, computeAgentState, normalizeDelta, validateStateDelta } = await import(pathToFileURL(bundledModulePath).href);
 
 test('validateStateDelta rejects unknown properties', () => {
   assert.equal(validateStateDelta({ unexpected: 'value' }), 'Unknown delta property: unexpected');
@@ -28,6 +28,36 @@ test('validateStateDelta rejects duplicate thread additions', () => {
   assert.equal(
     validateStateDelta({ add_threads: ['keep parity', 'keep parity'] }),
     'add_threads: must not contain duplicate values'
+  );
+});
+
+test('validateStateDelta accepts string shorthand for array fields', () => {
+  assert.equal(
+    validateStateDelta({
+      set_focus: 'Update vault with new answers',
+      add_recent: 'Player repos confirmed',
+      set_next: 'record answer',
+    }),
+    null
+  );
+});
+
+test('normalizeDelta converts string shorthand to canonical array fields', () => {
+  assert.deepEqual(
+    normalizeDelta({
+      add_threads: 'GCS migration',
+      remove_threads: 'old migration note',
+      add_constraints: 'player repos confirmed',
+      add_recent: 'updated vault',
+      set_next: 'continue implementation',
+    }),
+    {
+      add_threads: ['GCS migration'],
+      remove_threads: ['old migration note'],
+      add_constraints: ['player repos confirmed'],
+      add_recent: ['updated vault'],
+      set_next: ['continue implementation'],
+    }
   );
 });
 
@@ -57,6 +87,29 @@ test('appendStateDelta creates the parent directory and writes normalized jsonl'
   );
 });
 
+test('appendStateDelta writes canonical arrays for string shorthand fields', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-state-loose-write-'));
+  const deltaPath = join(root, '.beu', 'state', 'deltas.jsonl');
+
+  await appendStateDelta(
+    {
+      set_focus: 'Update vault with new answers',
+      add_recent: 'Player repos confirmed',
+      set_next: 'record answer',
+    },
+    deltaPath
+  );
+
+  assert.equal(
+    await readFile(deltaPath, 'utf8'),
+    `${JSON.stringify({
+      set_focus: 'Update vault with new answers',
+      add_recent: ['Player repos confirmed'],
+      set_next: ['record answer'],
+    })}\n`
+  );
+});
+
 test('appendStateDelta rejects invalid deltas without writing a file', async () => {
   const root = await mkdtemp(join(tmpdir(), 'beu-state-invalid-write-'));
   const deltaPath = join(root, '.beu', 'state', 'deltas.jsonl');
@@ -67,6 +120,30 @@ test('appendStateDelta rejects invalid deltas without writing a file', async () 
   );
 
   await assert.rejects(stat(deltaPath));
+});
+
+test('computeAgentState heals string shorthand from existing delta logs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-state-loose-fold-'));
+  const deltaPath = join(root, 'deltas.jsonl');
+
+  await writeFile(
+    deltaPath,
+    JSON.stringify({
+      set_focus: 'Update vault',
+      add_threads: 'confirm player repos',
+      add_recent: 'Player repos confirmed',
+      set_next: 'continue vault update',
+    }),
+    'utf8'
+  );
+
+  assert.deepEqual(await computeAgentState(deltaPath), {
+    focus: 'Update vault',
+    threads: ['confirm player repos'],
+    constraints: [],
+    recent: ['Player repos confirmed'],
+    next: ['continue vault update'],
+  });
 });
 
 test('computeAgentState reports invalid json with the source line number', async () => {

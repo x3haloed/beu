@@ -117,6 +117,7 @@ def validate_state_delta(value: Any) -> str | None:
     if not isinstance(value, dict):
         return "delta must be an object"
 
+    value = normalize_delta(value)
     keys = list(value.keys())
     if not keys:
         return "delta must include at least one property"
@@ -192,13 +193,14 @@ def create_state_delta_schema() -> dict[str, Any]:
                 "description": spec["description"],
             }
         else:
+            string_schema = {
+                "type": "string",
+                "minLength": spec["itemMinLength"],
+                "maxLength": spec["itemMaxLength"],
+            }
             schema = {
                 "type": "array",
-                "items": {
-                    "type": "string",
-                    "minLength": spec["itemMinLength"],
-                    "maxLength": spec["itemMaxLength"],
-                },
+                "items": string_schema,
                 "description": spec["description"],
             }
             if spec.get("unique"):
@@ -207,7 +209,10 @@ def create_state_delta_schema() -> dict[str, Any]:
                 schema["minItems"] = spec["minItems"]
             if "maxItems" in spec:
                 schema["maxItems"] = spec["maxItems"]
-            properties[key] = schema
+            properties[key] = {
+                "anyOf": [string_schema, schema],
+                "description": spec["description"],
+            }
 
     return {
         "name": "delta",
@@ -222,7 +227,16 @@ def create_state_delta_schema() -> dict[str, Any]:
 
 
 def normalize_delta(value: dict[str, Any]) -> dict[str, Any]:
-    return {key: item for key, item in value.items() if item is not None}
+    normalized: dict[str, Any] = {}
+    for key, item in value.items():
+        if item is None:
+            continue
+        spec = STATE_DELTA_FIELDS.get(key)
+        if spec is not None and spec["kind"] == "string[]" and isinstance(item, str):
+            normalized[key] = [item]
+        else:
+            normalized[key] = item
+    return normalized
 
 
 def append_unique(existing: list[str], additions: list[str]) -> list[str]:
@@ -322,6 +336,7 @@ def compute_agent_state(delta_path: Path = DELTA_PATH) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"Invalid JSON in {delta_path} at line {line_no}: {exc}") from exc
 
+        parsed = normalize_delta(parsed)
         validation_error = validate_state_delta(parsed)
         if validation_error is not None:
             raise ValueError(f"Invalid delta in {delta_path} at line {line_no}: {validation_error}")

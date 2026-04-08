@@ -5,15 +5,12 @@ const path = require('node:path');
 const os = require('node:os');
 
 const MANAGED_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop'];
-
-function shellQuote(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
+const MANAGED_COMMAND_PATH = path.join(os.homedir(), '.beu', 'compute-agent-state.js');
+const DESIRED_MATCHER = 'startup';
+const DESIRED_STATUS_MESSAGE = 'Loading BeU state';
 
 function hookCommand() {
-  const installedProgram = shellQuote(path.join(os.homedir(), '.beu', 'compute-agent-state.js'));
-  const deltaPath = shellQuote(path.join(os.homedir(), '.beu', 'state', 'deltas.jsonl'));
-  return `if [ -f ${deltaPath} ]; then node ${installedProgram} ${deltaPath}; else printf ''; fi`;
+  return `if [ -f "$HOME/.beu/state/deltas.jsonl" ]; then node "$HOME/.beu/compute-agent-state.js" "$HOME/.beu/state/deltas.jsonl"; else printf ''; fi`;
 }
 
 function desiredHooks() {
@@ -22,12 +19,12 @@ function desiredHooks() {
     hooks: {
       SessionStart: [
         {
-          matcher: 'startup|resume',
+          matcher: DESIRED_MATCHER,
           hooks: [
             {
               type: 'command',
               command,
-              statusMessage: 'Loading agent state',
+              statusMessage: DESIRED_STATUS_MESSAGE,
             },
           ],
         },
@@ -36,23 +33,50 @@ function desiredHooks() {
   };
 }
 
+function isObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isManagedCommandHook(hook) {
+  return (
+    isObject(hook) &&
+    hook.type === 'command' &&
+    typeof hook.command === 'string' &&
+    (hook.command === hookCommand() || hook.command.includes('compute-agent-state.js'))
+  );
+}
+
+function isManagedHookGroup(group) {
+  return isObject(group) && Array.isArray(group.hooks) && group.hooks.some(isManagedCommandHook);
+}
+
 function loadJson(targetPath) {
   return JSON.parse(fs.readFileSync(targetPath, 'utf8'));
 }
 
 function mergeHooks(existing, desired) {
-  const merged = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...existing } : {};
-  const mergedHooks =
-    merged.hooks && typeof merged.hooks === 'object' && !Array.isArray(merged.hooks)
-      ? { ...merged.hooks }
-      : {};
+  const merged = isObject(existing) ? { ...existing } : {};
+  const mergedHooks = isObject(merged.hooks) ? { ...merged.hooks } : {};
+  const desiredEventNames = new Set(Object.keys(desired.hooks));
 
   for (const eventName of MANAGED_HOOK_EVENTS) {
-    delete mergedHooks[eventName];
+    const groups = Array.isArray(mergedHooks[eventName]) ? mergedHooks[eventName].filter((group) => !isManagedHookGroup(group)) : [];
+
+    if (desiredEventNames.has(eventName)) {
+      const desiredGroups = Array.isArray(desired.hooks[eventName]) ? desired.hooks[eventName] : [];
+      mergedHooks[eventName] = [...groups, ...desiredGroups];
+    } else if (groups.length > 0) {
+      mergedHooks[eventName] = groups;
+    } else {
+      delete mergedHooks[eventName];
+    }
   }
 
   for (const [eventName, desiredGroups] of Object.entries(desired.hooks)) {
-    mergedHooks[eventName] = desiredGroups;
+    if (MANAGED_HOOK_EVENTS.includes(eventName)) {
+      continue;
+    }
+    mergedHooks[eventName] = Array.isArray(desiredGroups) ? desiredGroups : [];
   }
 
   merged.hooks = mergedHooks;
@@ -162,7 +186,7 @@ function main() {
   }
 
   const merged = mergeHooks(existing, desired);
-  const rendered = `${JSON.stringify(merged, null, 2)}\n`;
+  const rendered = JSON.stringify(merged, null, 2);
 
   if (args.dryRun) {
     process.stdout.write(rendered);
@@ -178,7 +202,18 @@ function main() {
 
   writeAtomic(args.target, rendered);
   process.stdout.write(`installed BEU session-start hooks at ${args.target}\n`);
-  process.stdout.write(`hook commands point at ${path.join(os.homedir(), '.beu', 'compute-agent-state.js')}\n`);
+  process.stdout.write(`hook commands point at ${MANAGED_COMMAND_PATH}\n`);
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  desiredHooks,
+  hookCommand,
+  isManagedCommandHook,
+  isManagedHookGroup,
+  mergeHooks,
+  parseArgs,
+};

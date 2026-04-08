@@ -10,7 +10,7 @@ const DESIRED_MATCHER = 'startup';
 const DESIRED_STATUS_MESSAGE = 'Loading BeU state';
 
 function hookCommand() {
-  return `if [ -f "$HOME/.beu/state/deltas.jsonl" ]; then node "$HOME/.beu/compute-agent-state.js" "$HOME/.beu/state/deltas.jsonl"; else printf ''; fi`;
+  return `if [ -f "$HOME/.beu/state/deltas.jsonl" ]; then node "$HOME/.beu/compute-agent-state.js" --codex-session-start-json "$HOME/.beu/state/deltas.jsonl"; else printf ''; fi`;
 }
 
 function desiredHooks() {

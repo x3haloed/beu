@@ -111,3 +111,47 @@ Otherwise, continue without calling it.
 `
   );
 });
+
+test('can emit Codex SessionStart hook JSON output', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'beu-codex-hook-'));
+  const stateDir = join(cwd, '.beu', 'state');
+  const deltaPath = join(stateDir, 'deltas.jsonl');
+
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(
+    deltaPath,
+    `${JSON.stringify({
+      set_focus: 'Debug Codex hook',
+      set_next: ['emit JSON'],
+    })}\n`,
+    'utf8'
+  );
+
+  const child = spawn(process.execPath, [CLI_PATH, '--codex-session-start-json', deltaPath], {
+    cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let stdout = '';
+  let stderr = '';
+
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+  });
+
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+
+  const code = await new Promise((resolve) => {
+    child.on('close', resolve);
+  });
+
+  assert.equal(code, 0, `stderr: ${stderr}`);
+
+  const parsed = JSON.parse(stdout);
+  assert.deepEqual(Object.keys(parsed), ['hookSpecificOutput']);
+  assert.equal(parsed.hookSpecificOutput.hookEventName, 'SessionStart');
+  assert.match(parsed.hookSpecificOutput.additionalContext, /^\[BEU STATE\]/);
+  assert.match(parsed.hookSpecificOutput.additionalContext, /"focus": "Debug Codex hook"/);
+});

@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 
 import { resolve } from 'node:path';
-import { computeAgentState, DELTA_PATH, formatStateContext } from './beu-state.js';
+import { computeAgentState, DELTA_PATH, formatCodexSessionStartOutput, formatStateContext } from './beu-state.js';
 
 async function main() {
-  const inputPath = process.argv[2] ? resolve(process.argv[2]) : DELTA_PATH;
+  const args = process.argv.slice(2);
+  const codexSessionStartJson = args.includes('--codex-session-start-json');
+  const inputPathArg = args.find((arg) => arg !== '--codex-session-start-json');
+  const inputPath = inputPathArg ? resolve(inputPathArg) : DELTA_PATH;
   const state = await computeAgentState(inputPath);
-  process.stdout.write(formatStateContext(state));
+  process.stdout.write(codexSessionStartJson ? formatCodexSessionStartOutput(state) : formatStateContext(state));
 }
 
 main().catch((error) => {

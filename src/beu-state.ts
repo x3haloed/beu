@@ -423,6 +423,15 @@ Otherwise, continue without calling it.
 `;
 }
 
+export function formatCodexSessionStartOutput(state: AgentState): string {
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: formatStateContext(state),
+    },
+  });
+}
+
 export function normalizeDelta(value: StateDelta): StateDelta {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as StateDelta;
 }

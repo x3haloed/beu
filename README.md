@@ -1,6 +1,6 @@
 # BeU
 
-BeU keeps agent orientation consistent across three host integrations by enforcing the same two-step model everywhere:
+BeU keeps agent orientation consistent across host integrations by enforcing the same two-step model everywhere:
 
 1. capture state deltas through a `delta` tool
 2. reconstruct current state from accumulated deltas and inject it into model context when a session starts
@@ -14,8 +14,9 @@ The canonical storage path is `~/.beu/state/deltas.jsonl`.
 | Codex | MCP server | `SessionStart` hook installed into `~/.codex/hooks.json` |
 | Copilot CLI | MCP server | `sessionStart` hook in `plugins/beu-copilot-cli/hooks.json` |
 | OpenCode | Native custom tool | First `chat.message` in each session as the session-start equivalent |
+| Hermes Agent | Native directory plugin | `pre_llm_call` injects the current state on the first turn |
 
-All three hosts share the same delta semantics, final state semantics, and prompt/tool wording through `src/beu-state.ts`.
+All hosts share the same delta semantics, final state semantics, and prompt/tool wording through `src/beu-state.ts` and plugins/beu-hermes/shcemas.py.
 
 ## Canonical Files
 
@@ -24,6 +25,7 @@ All three hosts share the same delta semantics, final state semantics, and promp
 - `src/compute-agent-state.ts`: CLI that folds the delta log and prints injected context text
 - `src/beu-mcp.ts`: MCP `delta` tool used by Codex and Copilot CLI
 - `plugins/beu-opencode/src/index.ts`: OpenCode-native wrapper around the shared state module
+- `plugins/beu-hermes/plugin.yaml`, `plugins/beu-hermes/__init__.py`, `plugins/beu-hermes/schemas.py`, and `plugins/beu-hermes/tools.py`: Hermes Agent plugin
 
 ## Commands
 
@@ -71,6 +73,12 @@ codex_hooks = true
 - OpenCode does not expose a direct session-start hook.
 - `plugins/beu-opencode/src/index.ts` injects computed state on the first `chat.message` in each session as the session-start equivalent.
 - The shipped artifact is the single bundled file `dist/beu-opencode.js`.
+
+### Hermes Agent
+
+- Hermes Agent loads the repo root as a directory plugin via `plugins/beu-hermes/plugin.yaml` and `plugins/beu-hermes/__init__.py`.
+- The plugin registers the BeU `delta` tool and injects reconstructed state on the first turn via `pre_llm_call`.
+- Deltas are stored at `~/.beu/state/deltas.jsonl`, matching the other host integrations.
 
 ## Validation
 

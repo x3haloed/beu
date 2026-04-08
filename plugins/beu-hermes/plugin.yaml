@@ -1,0 +1,3 @@
+name: beu
+version: 0.1.0
+description: Captures agent state so it can recover.

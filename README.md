@@ -1,62 +1,91 @@
 # BeU
 
-> Stop being stateless. *Be*come. *U*nfurl. Be You.
+BeU keeps agent orientation consistent across host integrations by enforcing the same two-step model everywhere:
 
-A stateless identity plugin for agent frameworks. Enables continuous learning, identity persistence, and long-term memory without requiring the host to manage lifecycle.
+1. capture state deltas through a `delta` tool
+2. reconstruct current state from accumulated deltas and inject it into model context when a session starts
 
-## What is BeU?
+The canonical storage path is `~/.beu/state/deltas.jsonl`.
 
-BeU implements the BetterClaw memory system - a proven approach to agent identity that:
+## Host Parity
 
-- **Survives context death** - Compresses experiences into storable form
-- **Lives in a hyperepisodic regime** - Handles rapid context turnover
-- **Inhabits a stable first-person frame** - Maintains identity across sessions
+| Host | Delta tool transport | State injection point |
+| --- | --- | --- |
+| Codex | MCP server | `SessionStart` hook installed into `~/.codex/hooks.json` |
+| Copilot CLI | MCP server | `sessionStart` hook in `plugins/beu-copilot-cli/hooks.json` |
+| OpenCode | Native custom tool | First `chat.message` in each session as the session-start equivalent |
+| Hermes Agent | Native directory plugin | `pre_llm_call` injects the current state on the first turn |
 
-The database contents become who the agent *is*.
+All hosts share the same delta semantics, final state semantics, and prompt/tool wording through `src/beu-state.ts` and plugins/beu-hermes/shcemas.py.
 
-## Quick Start
+## Canonical Files
+
+- `agent-state.schema.json`: final reconstructed state shape
+- `src/beu-state.ts`: shared delta validation, delta append, state folding, injected prompt text, and `delta` tool guidance
+- `src/compute-agent-state.ts`: CLI that folds the delta log and prints injected context text
+- `src/beu-mcp.ts`: MCP `delta` tool used by Codex and Copilot CLI
+- `plugins/beu-opencode/src/index.ts`: OpenCode-native wrapper around the shared state module
+- `plugins/beu-hermes/plugin.yaml`, `plugins/beu-hermes/__init__.py`, `plugins/beu-hermes/schemas.py`, and `plugins/beu-hermes/tools.py`: Hermes Agent plugin
+
+## Commands
+
+From the repo root:
 
 ```bash
-# Build
-cargo build --release
-
-# Run a command
-echo '{"version":"1.0.0","command":"identity","id":"1","payload":{"namespace":"default","query":"all"}}' | ./target/release/beu
+npm run build:mcp
+npm run build:opencode
+npm test
 ```
 
-## Logging
+Install the MCP-backed artifacts into `~/.beu`:
 
-BeU writes protocol responses to stdout and diagnostics to stderr.
+```bash
+npm run install:mcp
+```
 
-- Hermes/OpenClaw adapters treat `HERMES_LOG_LEVEL`, `HERMES_LOG_FORMAT`, and `HERMES_TRACE_PAYLOADS` as the host-level knobs and map them onto `BEU_*` when present.
-- Direct `BEU_*` variables still override that mapping if a developer wants to force BeU-specific behavior.
-- `BEU_LOG_LEVEL=warn|info|debug|trace` controls tracing verbosity
-- `BEU_LOG_FORMAT=human|json` controls stderr formatting
-- `BEU_TRACE_PAYLOADS=1` enables payload logging for deep debugging
+Install the OpenCode plugin bundle into `~/.config/opencode/plugins/beu-opencode.js`:
 
-Hermes and OpenClaw adapters can pass these environment variables through so hosts can opt into richer logs without changing the protocol surface.
+```bash
+npm run install:opencode
+```
 
-## Architecture
+## Host-Specific Install Notes
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for system design.
+### Codex
 
-## Protocol
+- Codex uses the installed MCP server at `~/.beu/beu-mcp.js`.
+- Codex needs a `SessionStart` hook that runs `~/.beu/compute-agent-state.js`.
+- Install or refresh that hook with `node .agents/skills/beu-installer/scripts/install_hooks.js`.
+- Codex hooks must be enabled in `~/.codex/config.toml`:
 
-See [SPEC.md](SPEC.md) for the STDIO protocol specification.
+```toml
+[features]
+codex_hooks = true
+```
 
-## Repository Layout
+### Copilot CLI
 
-See [REPO_LAYOUT.md](REPO_LAYOUT.md) for directory structure.
+- Copilot CLI uses the installed MCP server at `~/.beu/beu-mcp.js`.
+- `plugins/beu-copilot-cli/hooks.json` injects the output of `~/.beu/compute-agent-state.js` during `sessionStart`.
 
-## Adapters
+### OpenCode
 
-Host-specific adapters live in separate repos:
+- OpenCode does not expose a direct session-start hook.
+- `plugins/beu-opencode/src/index.ts` injects computed state on the first `chat.message` in each session as the session-start equivalent.
+- The shipped artifact is the single bundled file `dist/beu-opencode.js`.
 
-- `beu-hermes` - Hermes-agent (Python)
-- `beu-openclaw` - OpenClaw (TypeScript)
+### Hermes Agent
 
-Note: the Hermes adapter may eventually ship a friendly setup path that writes Hermes/Honcho config for the host, including a "honcho mode" option that suppresses local `MEMORY.md` writes for that peer. That would let BeU take the foreground without requiring changes to hermes-agent itself.
+- Hermes Agent loads the repo root as a directory plugin via `plugins/beu-hermes/plugin.yaml` and `plugins/beu-hermes/__init__.py`.
+- The plugin registers the BeU `delta` tool and injects reconstructed state on the first turn via `pre_llm_call`.
+- Deltas are stored at `~/.beu/state/deltas.jsonl`, matching the other host integrations.
 
-## License
+## Validation
 
-MIT or Apache-2.0
+Before finishing behavior changes, verify parity:
+
+```bash
+npm run build:mcp
+npm run build:opencode
+npm test
+```

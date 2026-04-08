@@ -1,0 +1,38 @@
+{
+  "name": "beu",
+  "version": "0.1.0",
+  "description": "Captures agent state so that it can recover.",
+  "author": {
+    "name": "Chad Kirby",
+    "email": "chadjkirby@icloud.com",
+    "url": "https://github.com/x3haloed"
+  },
+  "homepage": "https://github.com/x3haloed/beu",
+  "repository": "https://github.com/x3haloed/beu",
+  "license": "MIT",
+  "keywords": [
+    "memory"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "BeU",
+    "shortDescription": "Captures agent state so that it can recover.",
+    "longDescription": "BEcoming. Unfurling. Be you. Captures agent state so that it can recover.",
+    "developerName": "Chad Kirby",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/x3haloed/beu",
+    "privacyPolicyURL": "https://github.com/x3haloed/beu",
+    "termsOfServiceURL": "https://github.com/x3haloed/beu",
+    "defaultPrompt": [
+      "Record the current state delta before switching tasks."
+    ],
+    "brandColor": "#111111",
+    "composerIcon": "./assets/codex-ledger.svg",
+    "logo": "./assets/codex-ledger.svg",
+    "screenshots": []
+  }
+}

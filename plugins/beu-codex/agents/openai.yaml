@@ -1,0 +1,4 @@
+interface:
+  display_name: "BeU"
+  short_description: "Captures agent state so that it can recover."
+  default_prompt: "Record the current state delta before switching tasks."

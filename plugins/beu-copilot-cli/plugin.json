@@ -1,0 +1,15 @@
+{
+  "name": "beu",
+  "description": "Captures agent state so that it can recover.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Chad Kirby",
+    "email": "chadjkirby@icloud.com"
+  },
+  "license": "MIT",
+  "keywords": ["memory"],
+  "agents": "agents/",
+  "skills": ["skills/", "extra-skills/"],
+  "hooks": "hooks.json",
+  "mcpServers": ".mcp.json"
+}

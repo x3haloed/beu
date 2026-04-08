@@ -1,14 +1,14 @@
 {
-  "name": "agent-homebase",
+  "name": "beu-repo",
   "interface": {
-    "displayName": "Agent Homebase"
+    "displayName": "BeU Repo"
   },
   "plugins": [
     {
       "name": "beu",
       "source": {
         "source": "local",
-        "path": "./plugins/beu"
+        "path": "./plugins/beu-codex"
       },
       "policy": {
         "installation": "AVAILABLE",

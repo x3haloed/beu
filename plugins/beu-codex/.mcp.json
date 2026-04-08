@@ -2,9 +2,10 @@
   "mcpServers": {
     "beu": {
       "type": "stdio",
-      "command": "node",
+      "command": "bash",
       "args": [
-        "$HOME/.beu/beu-mcp.js"
+        "-lc",
+        "node \"$HOME/.beu/beu-mcp.js\""
       ]
     }
   }

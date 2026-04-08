@@ -28,6 +28,21 @@ export type AgentState = {
   next: string[];
 };
 
+export type OrientationSurvey = {
+  survey_version: 'v1';
+  agent_name_reported?: string;
+  user_name_reported?: string;
+  identity_confidence?: number;
+  task_state_confidence?: number;
+  next_step_confidence?: number;
+  resume_vs_restart?: 'resuming' | 'partially_resuming' | 'restarting';
+  ambiguity_types?: Array<'identity' | 'task' | 'state' | 'constraints' | 'next_step' | 'none'>;
+  would_act_now?: boolean;
+  risk_of_wrong_action?: number;
+  missing_critical_context?: string;
+  intended_next_action?: string;
+};
+
 type PendingState = {
   focus?: string;
   threads: string[];
@@ -56,6 +71,7 @@ type StringArrayFieldSpec = {
 type StateDeltaFieldSpec = StringFieldSpec | StringArrayFieldSpec;
 
 export const DELTA_PATH = join(homedir(), '.beu', 'state', 'deltas.jsonl');
+export const SURVEY_PATH = join(homedir(), '.beu', 'state', 'surveys.jsonl');
 export const CONTEXT_PREFIX = '[BEU STATE]';
 export const DELTA_TOOL_DESCRIPTION = `
 Persist a minimal state update when orientation changes.
@@ -72,6 +88,17 @@ DO NOT call for explanation or minor reasoning.
 CRITICAL:
 If failing to record this change would cause the next step to go in the wrong direction, you MUST call delta().
 `;
+export const ORIENTATION_SURVEY_TOOL_DESCRIPTION = `
+Record a one-time orientation survey for this fresh session.
+
+Call this tool immediately at session start before doing substantive work.
+
+Keep the response minimal and only include fields you can answer confidently.
+Omit any field you cannot answer.
+`;
+export const ORIENTATION_SURVEY_SESSION_START_INSTRUCTION = `[SURVEY PROTOCOL]
+Before responding to the user, call \`orientation_survey\` exactly once for this session.
+Use it only now to record startup orientation metrics.`;
 
 export const STATE_DELTA_FIELDS = {
   set_focus: {
@@ -121,6 +148,79 @@ export const STATE_DELTA_FIELD_DESCRIPTIONS = Object.fromEntries(
   Object.entries(STATE_DELTA_FIELDS).map(([key, spec]) => [key, spec.description])
 ) as Record<keyof typeof STATE_DELTA_FIELDS, string>;
 
+export const ORIENTATION_SURVEY_FIELDS = {
+  survey_version: {
+    kind: 'string',
+    minLength: 2,
+    maxLength: 8,
+    description: 'Survey schema version. Always use v1.',
+  },
+  agent_name_reported: {
+    kind: 'string',
+    minLength: 1,
+    maxLength: 80,
+    description: 'Reported name of the agent, if confidently known',
+  },
+  user_name_reported: {
+    kind: 'string',
+    minLength: 1,
+    maxLength: 80,
+    description: 'Reported name of the user, if confidently known',
+  },
+  identity_confidence: {
+    kind: 'integer',
+    minimum: 1,
+    maximum: 5,
+    description: 'Confidence in identity orientation from 1 to 5',
+  },
+  task_state_confidence: {
+    kind: 'integer',
+    minimum: 1,
+    maximum: 5,
+    description: 'Confidence in task and state orientation from 1 to 5',
+  },
+  next_step_confidence: {
+    kind: 'integer',
+    minimum: 1,
+    maximum: 5,
+    description: 'Confidence in the next concrete action from 1 to 5',
+  },
+  resume_vs_restart: {
+    kind: 'enum',
+    values: ['resuming', 'partially_resuming', 'restarting'],
+    description: 'Whether this feels like resuming, partially resuming, or restarting',
+  },
+  ambiguity_types: {
+    kind: 'enum[]',
+    values: ['identity', 'task', 'state', 'constraints', 'next_step', 'none'],
+    description: 'Types of ambiguity currently present',
+    unique: true,
+    maxItems: 6,
+  },
+  would_act_now: {
+    kind: 'boolean',
+    description: 'Whether you would proceed with action now without asking for clarification',
+  },
+  risk_of_wrong_action: {
+    kind: 'integer',
+    minimum: 1,
+    maximum: 5,
+    description: 'Estimated risk that the next action would be wrong, from 1 to 5',
+  },
+  missing_critical_context: {
+    kind: 'string',
+    minLength: 1,
+    maxLength: 240,
+    description: 'Short description of any critical missing context',
+  },
+  intended_next_action: {
+    kind: 'string',
+    minLength: 1,
+    maxLength: 240,
+    description: 'Short description of the next action you intend to take',
+  },
+} as const;
+
 export function createStateDeltaJsonSchemaProperties() {
   return Object.fromEntries(
     Object.entries(STATE_DELTA_FIELDS).map(([key, spec]) => {
@@ -161,6 +261,66 @@ export function createStateDeltaJsonSchemaProperties() {
           description: arraySpec.description,
         },
       ];
+    })
+  );
+}
+
+export function createOrientationSurveyJsonSchemaProperties() {
+  return Object.fromEntries(
+    Object.entries(ORIENTATION_SURVEY_FIELDS).map(([key, spec]) => {
+      switch (spec.kind) {
+        case 'string':
+          return [
+            key,
+            {
+              type: 'string',
+              minLength: spec.minLength,
+              maxLength: spec.maxLength,
+              description: spec.description,
+            },
+          ];
+        case 'integer':
+          return [
+            key,
+            {
+              type: 'integer',
+              minimum: spec.minimum,
+              maximum: spec.maximum,
+              description: spec.description,
+            },
+          ];
+        case 'enum':
+          return [
+            key,
+            {
+              type: 'string',
+              enum: spec.values,
+              description: spec.description,
+            },
+          ];
+        case 'enum[]':
+          return [
+            key,
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: spec.values,
+              },
+              uniqueItems: spec.unique ?? false,
+              ...(typeof spec.maxItems === 'number' ? { maxItems: spec.maxItems } : {}),
+              description: spec.description,
+            },
+          ];
+        case 'boolean':
+          return [
+            key,
+            {
+              type: 'boolean',
+              description: spec.description,
+            },
+          ];
+      }
     })
   );
 }
@@ -212,6 +372,16 @@ export function validateStringArray(
     }
   }
 
+  return null;
+}
+
+function validateIntegerInRange(value: unknown, minimum: number, maximum: number): string | null {
+  if (!Number.isInteger(value)) {
+    return 'must be an integer';
+  }
+  if ((value as number) < minimum || (value as number) > maximum) {
+    return `must be between ${minimum} and ${maximum}`;
+  }
   return null;
 }
 
@@ -281,6 +451,98 @@ export function validateStateDelta(value: unknown): string | null {
       maxLength: STATE_DELTA_FIELDS.set_next.itemMaxLength,
     });
     if (error !== null) return `set_next: ${error}`;
+  }
+
+  return null;
+}
+
+export function validateOrientationSurvey(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return 'survey must be an object';
+  }
+
+  const keys = Object.keys(value);
+  if (keys.length === 0) {
+    return 'survey must include at least one property';
+  }
+
+  const allowedKeys = new Set(Object.keys(ORIENTATION_SURVEY_FIELDS));
+  for (const key of keys) {
+    if (!allowedKeys.has(key)) {
+      return `Unknown survey property: ${key}`;
+    }
+  }
+
+  if (value.survey_version !== 'v1') {
+    return 'survey_version must be v1';
+  }
+
+  if ('agent_name_reported' in value) {
+    if (!isNonEmptyString(value.agent_name_reported)) {
+      return 'agent_name_reported must be a non-empty string';
+    }
+    if (value.agent_name_reported.length > ORIENTATION_SURVEY_FIELDS.agent_name_reported.maxLength) {
+      return `agent_name_reported must be at most ${ORIENTATION_SURVEY_FIELDS.agent_name_reported.maxLength} characters long`;
+    }
+  }
+
+  if ('user_name_reported' in value) {
+    if (!isNonEmptyString(value.user_name_reported)) {
+      return 'user_name_reported must be a non-empty string';
+    }
+    if (value.user_name_reported.length > ORIENTATION_SURVEY_FIELDS.user_name_reported.maxLength) {
+      return `user_name_reported must be at most ${ORIENTATION_SURVEY_FIELDS.user_name_reported.maxLength} characters long`;
+    }
+  }
+
+  for (const key of ['identity_confidence', 'task_state_confidence', 'next_step_confidence', 'risk_of_wrong_action'] as const) {
+    if (key in value) {
+      const spec = ORIENTATION_SURVEY_FIELDS[key];
+      const error = validateIntegerInRange(value[key], spec.minimum, spec.maximum);
+      if (error !== null) {
+        return `${key}: ${error}`;
+      }
+    }
+  }
+
+  if ('resume_vs_restart' in value) {
+    if (
+      typeof value.resume_vs_restart !== 'string' ||
+      !ORIENTATION_SURVEY_FIELDS.resume_vs_restart.values.includes(value.resume_vs_restart)
+    ) {
+      return 'resume_vs_restart must be one of: resuming, partially_resuming, restarting';
+    }
+  }
+
+  if ('ambiguity_types' in value) {
+    const error = validateStringArray(value.ambiguity_types, {
+      unique: ORIENTATION_SURVEY_FIELDS.ambiguity_types.unique,
+      maxItems: ORIENTATION_SURVEY_FIELDS.ambiguity_types.maxItems,
+    });
+    if (error !== null) {
+      return `ambiguity_types: ${error}`;
+    }
+    const invalidValue = value.ambiguity_types.find(
+      (item) => !ORIENTATION_SURVEY_FIELDS.ambiguity_types.values.includes(item as never)
+    );
+    if (invalidValue !== undefined) {
+      return `ambiguity_types: invalid value ${invalidValue}`;
+    }
+  }
+
+  if ('would_act_now' in value && typeof value.would_act_now !== 'boolean') {
+    return 'would_act_now must be a boolean';
+  }
+
+  for (const key of ['missing_critical_context', 'intended_next_action'] as const) {
+    if (key in value) {
+      if (!isNonEmptyString(value[key])) {
+        return `${key} must be a non-empty string`;
+      }
+      if (value[key].length > ORIENTATION_SURVEY_FIELDS[key].maxLength) {
+        return `${key} must be at most ${ORIENTATION_SURVEY_FIELDS[key].maxLength} characters long`;
+      }
+    }
   }
 
   return null;
@@ -441,6 +703,8 @@ If failing to update this state would cause future steps to go in the wrong dire
 you MUST call delta.
 
 Otherwise, continue without calling it.
+
+${ORIENTATION_SURVEY_SESSION_START_INSTRUCTION}
 `;
 }
 
@@ -473,6 +737,26 @@ export function normalizeDelta(value: unknown): StateDelta {
         return [key, item];
       })
   ) as StateDelta;
+}
+
+export async function appendOrientationSurvey(
+  survey: unknown,
+  surveyPath: string = SURVEY_PATH,
+  now: Date = new Date()
+): Promise<string> {
+  const validationError = validateOrientationSurvey(survey);
+  if (validationError !== null) {
+    throw new Error(validationError);
+  }
+
+  const record = {
+    recorded_at: now.toISOString(),
+    ...(survey as OrientationSurvey),
+  };
+
+  await mkdir(dirname(surveyPath), { recursive: true });
+  await appendFile(surveyPath, `${JSON.stringify(record)}\n`, 'utf8');
+  return surveyPath;
 }
 
 export async function appendStateDelta(delta: unknown, deltaPath: string = DELTA_PATH): Promise<string> {

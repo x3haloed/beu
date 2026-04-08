@@ -18,7 +18,14 @@ await build({
   outfile: bundledModulePath,
 });
 
-const { appendStateDelta, computeAgentState, normalizeDelta, validateStateDelta } = await import(pathToFileURL(bundledModulePath).href);
+const {
+  appendOrientationSurvey,
+  appendStateDelta,
+  computeAgentState,
+  normalizeDelta,
+  validateOrientationSurvey,
+  validateStateDelta,
+} = await import(pathToFileURL(bundledModulePath).href);
 
 test('validateStateDelta rejects unknown properties', () => {
   assert.equal(validateStateDelta({ unexpected: 'value' }), 'Unknown delta property: unexpected');
@@ -120,6 +127,51 @@ test('appendStateDelta rejects invalid deltas without writing a file', async () 
   );
 
   await assert.rejects(stat(deltaPath));
+});
+
+test('validateOrientationSurvey rejects an unknown property', () => {
+  assert.equal(validateOrientationSurvey({ survey_version: 'v1', unexpected: true }), 'Unknown survey property: unexpected');
+});
+
+test('appendOrientationSurvey creates the parent directory and writes a timestamped jsonl record', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-survey-write-'));
+  const surveyPath = join(root, '.beu', 'state', 'surveys.jsonl');
+
+  const writtenPath = await appendOrientationSurvey(
+    {
+      survey_version: 'v1',
+      agent_name_reported: 'Codex',
+      identity_confidence: 5,
+      intended_next_action: 'Inspect the repo hooks.',
+    },
+    surveyPath,
+    new Date('2026-04-08T12:34:56.000Z')
+  );
+
+  assert.equal(writtenPath, surveyPath);
+  await stat(join(root, '.beu', 'state'));
+  assert.equal(
+    await readFile(surveyPath, 'utf8'),
+    `${JSON.stringify({
+      recorded_at: '2026-04-08T12:34:56.000Z',
+      survey_version: 'v1',
+      agent_name_reported: 'Codex',
+      identity_confidence: 5,
+      intended_next_action: 'Inspect the repo hooks.',
+    })}\n`
+  );
+});
+
+test('appendOrientationSurvey rejects invalid surveys without writing a file', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-survey-invalid-write-'));
+  const surveyPath = join(root, '.beu', 'state', 'surveys.jsonl');
+
+  await assert.rejects(
+    appendOrientationSurvey({ survey_version: 'v2' }, surveyPath),
+    /survey_version must be v1/
+  );
+
+  await assert.rejects(stat(surveyPath));
 });
 
 test('computeAgentState heals string shorthand from existing delta logs', async () => {

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from .schemas import (
     DELTA_TOOL_DESCRIPTION,
+    ORIENTATION_SURVEY_TOOL_DESCRIPTION,
     compute_agent_state,
+    create_orientation_survey_schema,
     create_state_delta_schema,
     format_state_context,
 )
-from .tools import handle_delta
+from .tools import handle_delta, handle_orientation_survey
 
 _INJECTED_SESSIONS: set[str] = set()
 
@@ -43,6 +45,13 @@ def _mark_session_end(**kwargs):
 
 def register(ctx):
     ctx.register_tool("delta", "beu", create_state_delta_schema(), handle_delta, description=DELTA_TOOL_DESCRIPTION)
+    ctx.register_tool(
+        "orientation_survey",
+        "beu",
+        create_orientation_survey_schema(),
+        handle_orientation_survey,
+        description=ORIENTATION_SURVEY_TOOL_DESCRIPTION,
+    )
     ctx.register_hook("pre_llm_call", _inject_state_for_turn)
     ctx.register_hook("on_session_start", _mark_session_start)
     ctx.register_hook("on_session_end", _mark_session_end)

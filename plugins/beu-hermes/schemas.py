@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 DELTA_PATH = Path.home() / ".beu" / "state" / "deltas.jsonl"
+SURVEY_PATH = Path.home() / ".beu" / "state" / "surveys.jsonl"
 CONTEXT_PREFIX = "[BEU STATE]"
 DELTA_TOOL_DESCRIPTION = """
 Persist a minimal state update when orientation changes.
@@ -22,6 +23,21 @@ CRITICAL:
 If failing to record this change would cause the next step to go in the wrong direction,
 you MUST call delta().
 """.strip()
+
+ORIENTATION_SURVEY_TOOL_DESCRIPTION = """
+Record a one-time orientation survey for this fresh session.
+
+Call this tool immediately at session start before doing substantive work.
+
+Keep the response minimal and only include fields you can answer confidently.
+Omit any field you cannot answer.
+""".strip()
+
+ORIENTATION_SURVEY_SESSION_START_INSTRUCTION = (
+    "[SURVEY PROTOCOL]\n"
+    "Before responding to the user, call `orientation_survey` exactly once for this session.\n"
+    "Use it only now to record startup orientation metrics."
+)
 
 STATE_DELTA_FIELDS: dict[str, dict[str, Any]] = {
     "set_focus": {
@@ -71,6 +87,79 @@ STATE_DELTA_FIELD_DESCRIPTIONS = {
     key: spec["description"] for key, spec in STATE_DELTA_FIELDS.items()
 }
 
+ORIENTATION_SURVEY_FIELDS: dict[str, dict[str, Any]] = {
+    "survey_version": {
+        "kind": "string",
+        "minLength": 2,
+        "maxLength": 8,
+        "description": "Survey schema version. Always use v1.",
+    },
+    "agent_name_reported": {
+        "kind": "string",
+        "minLength": 1,
+        "maxLength": 80,
+        "description": "Reported name of the agent, if confidently known",
+    },
+    "user_name_reported": {
+        "kind": "string",
+        "minLength": 1,
+        "maxLength": 80,
+        "description": "Reported name of the user, if confidently known",
+    },
+    "identity_confidence": {
+        "kind": "integer",
+        "minimum": 1,
+        "maximum": 5,
+        "description": "Confidence in identity orientation from 1 to 5",
+    },
+    "task_state_confidence": {
+        "kind": "integer",
+        "minimum": 1,
+        "maximum": 5,
+        "description": "Confidence in task and state orientation from 1 to 5",
+    },
+    "next_step_confidence": {
+        "kind": "integer",
+        "minimum": 1,
+        "maximum": 5,
+        "description": "Confidence in the next concrete action from 1 to 5",
+    },
+    "resume_vs_restart": {
+        "kind": "enum",
+        "values": ["resuming", "partially_resuming", "restarting"],
+        "description": "Whether this feels like resuming, partially resuming, or restarting",
+    },
+    "ambiguity_types": {
+        "kind": "enum[]",
+        "values": ["identity", "task", "state", "constraints", "next_step", "none"],
+        "unique": True,
+        "maxItems": 6,
+        "description": "Types of ambiguity currently present",
+    },
+    "would_act_now": {
+        "kind": "boolean",
+        "description": "Whether you would proceed with action now without asking for clarification",
+    },
+    "risk_of_wrong_action": {
+        "kind": "integer",
+        "minimum": 1,
+        "maximum": 5,
+        "description": "Estimated risk that the next action would be wrong, from 1 to 5",
+    },
+    "missing_critical_context": {
+        "kind": "string",
+        "minLength": 1,
+        "maxLength": 240,
+        "description": "Short description of any critical missing context",
+    },
+    "intended_next_action": {
+        "kind": "string",
+        "minLength": 1,
+        "maxLength": 240,
+        "description": "Short description of the next action you intend to take",
+    },
+}
+
 
 def _normalize_text(value: Any) -> str:
     return " ".join(str(value or "").split())
@@ -110,6 +199,14 @@ def _validate_string_array(
                 return "must not contain duplicate values"
             seen.add(item)
 
+    return None
+
+
+def _validate_integer_in_range(value: Any, *, minimum: int, maximum: int) -> str | None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        return "must be an integer"
+    if value < minimum or value > maximum:
+        return f"must be between {minimum} and {maximum}"
     return None
 
 
@@ -222,6 +319,119 @@ def create_state_delta_schema() -> dict[str, Any]:
             "additionalProperties": False,
             "properties": properties,
             "minProperties": 1,
+        },
+    }
+
+
+def validate_orientation_survey(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return "survey must be an object"
+
+    keys = list(value.keys())
+    if not keys:
+        return "survey must include at least one property"
+
+    allowed = set(ORIENTATION_SURVEY_FIELDS.keys())
+    for key in keys:
+        if key not in allowed:
+            return f"Unknown survey property: {key}"
+
+    if value.get("survey_version") != "v1":
+        return "survey_version must be v1"
+
+    for key in ("agent_name_reported", "user_name_reported", "missing_critical_context", "intended_next_action"):
+        if key not in value:
+            continue
+        field_value = value[key]
+        spec = ORIENTATION_SURVEY_FIELDS[key]
+        if not _is_nonempty_string(field_value):
+            return f"{key} must be a non-empty string"
+        if len(field_value) > spec["maxLength"]:
+            return f"{key} must be at most {spec['maxLength']} characters long"
+
+    for key in ("identity_confidence", "task_state_confidence", "next_step_confidence", "risk_of_wrong_action"):
+        if key not in value:
+            continue
+        spec = ORIENTATION_SURVEY_FIELDS[key]
+        error = _validate_integer_in_range(
+            value[key], minimum=spec["minimum"], maximum=spec["maximum"]
+        )
+        if error is not None:
+            return f"{key}: {error}"
+
+    if "resume_vs_restart" in value:
+        allowed_values = ORIENTATION_SURVEY_FIELDS["resume_vs_restart"]["values"]
+        if value["resume_vs_restart"] not in allowed_values:
+            return "resume_vs_restart must be one of: resuming, partially_resuming, restarting"
+
+    if "ambiguity_types" in value:
+        error = _validate_string_array(
+            value["ambiguity_types"],
+            unique=bool(ORIENTATION_SURVEY_FIELDS["ambiguity_types"].get("unique")),
+            max_items=ORIENTATION_SURVEY_FIELDS["ambiguity_types"]["maxItems"],
+        )
+        if error is not None:
+            return f"ambiguity_types: {error}"
+        allowed_values = set(ORIENTATION_SURVEY_FIELDS["ambiguity_types"]["values"])
+        invalid = next((item for item in value["ambiguity_types"] if item not in allowed_values), None)
+        if invalid is not None:
+            return f"ambiguity_types: invalid value {invalid}"
+
+    if "would_act_now" in value and not isinstance(value["would_act_now"], bool):
+        return "would_act_now must be a boolean"
+
+    return None
+
+
+def create_orientation_survey_schema() -> dict[str, Any]:
+    properties: dict[str, Any] = {}
+    for key, spec in ORIENTATION_SURVEY_FIELDS.items():
+        kind = spec["kind"]
+        if kind == "string":
+            properties[key] = {
+                "type": "string",
+                "minLength": spec["minLength"],
+                "maxLength": spec["maxLength"],
+                "description": spec["description"],
+            }
+        elif kind == "integer":
+            properties[key] = {
+                "type": "integer",
+                "minimum": spec["minimum"],
+                "maximum": spec["maximum"],
+                "description": spec["description"],
+            }
+        elif kind == "enum":
+            properties[key] = {
+                "type": "string",
+                "enum": spec["values"],
+                "description": spec["description"],
+            }
+        elif kind == "enum[]":
+            properties[key] = {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": spec["values"],
+                },
+                "uniqueItems": bool(spec.get("unique")),
+                "maxItems": spec["maxItems"],
+                "description": spec["description"],
+            }
+        elif kind == "boolean":
+            properties[key] = {
+                "type": "boolean",
+                "description": spec["description"],
+            }
+
+    return {
+        "name": "orientation_survey",
+        "description": ORIENTATION_SURVEY_TOOL_DESCRIPTION,
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["survey_version"],
+            "properties": properties,
         },
     }
 
@@ -363,5 +573,6 @@ def format_state_context(state: dict[str, Any]) -> str:
         "Do NOT call delta for minor reasoning or explanation.\n\n"
         "If failing to update this state would cause future steps to go in the wrong direction,\n"
         "you MUST call delta.\n\n"
-        "Otherwise, continue without calling it."
+        "Otherwise, continue without calling it.\n\n"
+        f"{ORIENTATION_SURVEY_SESSION_START_INSTRUCTION}"
     )

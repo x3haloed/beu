@@ -9,11 +9,16 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import {
+  appendOrientationSurvey,
   appendStateDelta,
   createStateDeltaJsonSchemaProperties,
   DELTA_PATH,
   DELTA_TOOL_DESCRIPTION,
+  createOrientationSurveyJsonSchemaProperties,
+  ORIENTATION_SURVEY_TOOL_DESCRIPTION,
+  SURVEY_PATH,
   validateStateDelta,
+  validateOrientationSurvey,
 } from './beu-state.js';
 
 const SERVER_NAME = 'beu';
@@ -24,6 +29,13 @@ const STATE_DELTA_SCHEMA = {
   additionalProperties: false,
   properties: createStateDeltaJsonSchemaProperties(),
   minProperties: 1
+};
+
+const ORIENTATION_SURVEY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['survey_version'],
+  properties: createOrientationSurveyJsonSchemaProperties(),
 };
 
 class BeuMcpServer {
@@ -60,39 +72,69 @@ class BeuMcpServer {
           description: DELTA_TOOL_DESCRIPTION,
           inputSchema: STATE_DELTA_SCHEMA,
         },
+        {
+          name: 'orientation_survey',
+          description: ORIENTATION_SURVEY_TOOL_DESCRIPTION,
+          inputSchema: ORIENTATION_SURVEY_SCHEMA,
+        },
       ],
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name !== 'delta') {
+      if (request.params.name !== 'delta' && request.params.name !== 'orientation_survey') {
         throw new McpError(
           ErrorCode.MethodNotFound,
           `Unknown tool: ${request.params.name}`
         );
       }
 
-      const delta = request.params.arguments;
-      const validationError = validateStateDelta(delta);
-      
-      if (validationError !== null) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: validationError,
-            },
-          ],
-          isError: true,
-        };
-      }
-
       try {
-        await appendStateDelta(delta);
+        if (request.params.name === 'delta') {
+          const delta = request.params.arguments;
+          const validationError = validateStateDelta(delta);
+          if (validationError !== null) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: validationError,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          await appendStateDelta(delta);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Appended delta to ${DELTA_PATH}`,
+              },
+            ],
+          };
+        }
+
+        const survey = request.params.arguments;
+        const validationError = validateOrientationSurvey(survey);
+        if (validationError !== null) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: validationError,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        await appendOrientationSurvey(survey);
         return {
           content: [
             {
               type: 'text',
-              text: `Appended delta to ${DELTA_PATH}`,
+              text: `Appended orientation survey to ${SURVEY_PATH}`,
             },
           ],
         };
@@ -101,7 +143,7 @@ class BeuMcpServer {
           content: [
             {
               type: 'text',
-              text: `Failed to append delta: ${error instanceof Error ? error.message : String(error)}`,
+              text: `Failed to append ${request.params.name}: ${error instanceof Error ? error.message : String(error)}`,
             },
           ],
           isError: true,

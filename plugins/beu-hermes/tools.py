@@ -34,6 +34,8 @@ def handle_delta(args: dict[str, Any], **_: Any) -> str:
             "add_threads",
             "remove_threads",
             "add_constraints",
+            "add_hypothesis",
+            "invalidate_hypothesis",
             "add_recent",
             "set_next",
         )

@@ -67,6 +67,51 @@ STATE_DELTA_FIELDS: dict[str, dict[str, Any]] = {
         "unique": True,
         "description": "Add newly discovered constraints or invariants",
     },
+    "add_hypothesis": {
+        "kind": "object",
+        "description": "Record a strong, falsifiable belief about the user, agent, environment, or working context that you are relying on. If you act on it, you must record the concrete evidence that would prove it wrong.",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["hypothesis", "invalidated_by"],
+            "properties": {
+                "hypothesis": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "The strong, falsifiable belief you are relying on",
+                },
+                "invalidated_by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "The concrete evidence that would prove this belief wrong",
+                },
+            },
+        },
+    },
+    "invalidate_hypothesis": {
+        "kind": "object",
+        "description": "Invalidate an active hypothesis by its 1-based displayed index, with the reason it was invalidated",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["index", "reason"],
+            "properties": {
+                "index": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-based index from the currently displayed active hypothesis list",
+                },
+                "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "Why the hypothesis was found to be invalid",
+                },
+            },
+        },
+    },
     "add_recent": {
         "kind": "string[]",
         "itemMinLength": 1,
@@ -210,6 +255,44 @@ def _validate_integer_in_range(value: Any, *, minimum: int, maximum: int) -> str
     return None
 
 
+def _validate_hypothesis_record(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return "must be an object"
+
+    hypothesis = value.get("hypothesis")
+    if not _is_nonempty_string(hypothesis):
+        return "hypothesis must be a non-empty string"
+    if len(hypothesis) > 200:
+        return "hypothesis must be at most 200 characters long"
+
+    invalidated_by = value.get("invalidated_by")
+    if not _is_nonempty_string(invalidated_by):
+        return "invalidated_by must be a non-empty string"
+    if len(invalidated_by) > 200:
+        return "invalidated_by must be at most 200 characters long"
+
+    return None
+
+
+def _validate_hypothesis_invalidation(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return "must be an object"
+
+    index_error = _validate_integer_in_range(
+        value.get("index"), minimum=1, maximum=2**53 - 1
+    )
+    if index_error is not None:
+        return f"index: {index_error}"
+
+    reason = value.get("reason")
+    if not _is_nonempty_string(reason):
+        return "reason must be a non-empty string"
+    if len(reason) > 200:
+        return "reason must be at most 200 characters long"
+
+    return None
+
+
 def validate_state_delta(value: Any) -> str | None:
     if not isinstance(value, dict):
         return "delta must be an object"
@@ -258,6 +341,16 @@ def validate_state_delta(value: Any) -> str | None:
         if error is not None:
             return f"add_constraints: {error}"
 
+    if "add_hypothesis" in value:
+        error = _validate_hypothesis_record(value["add_hypothesis"])
+        if error is not None:
+            return f"add_hypothesis: {error}"
+
+    if "invalidate_hypothesis" in value:
+        error = _validate_hypothesis_invalidation(value["invalidate_hypothesis"])
+        if error is not None:
+            return f"invalidate_hypothesis: {error}"
+
     if "add_recent" in value:
         error = _validate_string_array(
             value["add_recent"],
@@ -287,6 +380,11 @@ def create_state_delta_schema() -> dict[str, Any]:
                 "type": "string",
                 "minLength": spec["minLength"],
                 "maxLength": spec["maxLength"],
+                "description": spec["description"],
+            }
+        elif spec["kind"] == "object":
+            properties[key] = {
+                **spec["schema"],
                 "description": spec["description"],
             }
         else:
@@ -459,11 +557,49 @@ def append_unique(existing: list[str], additions: list[str]) -> list[str]:
     return next_values
 
 
+def append_unique_hypothesis(
+    existing: list[dict[str, str]], addition: dict[str, str]
+) -> list[dict[str, str]]:
+    if any(
+        item.get("hypothesis") == addition.get("hypothesis")
+        and item.get("invalidated_by") == addition.get("invalidated_by")
+        for item in existing
+    ):
+        return list(existing)
+    return [*existing, dict(addition)]
+
+
+def invalidate_hypothesis(
+    hypotheses: list[dict[str, str]], invalidation: dict[str, Any] | None
+) -> list[dict[str, str]]:
+    if invalidation is None:
+        return list(hypotheses)
+
+    index = int(invalidation["index"])
+    if index > len(hypotheses):
+        plural = "" if len(hypotheses) == 1 else "es"
+        raise ValueError(
+            f"Computed state is invalid: invalidate_hypothesis index {index} is out of range for {len(hypotheses)} active hypothesis{plural}"
+        )
+
+    return [item for position, item in enumerate(hypotheses, start=1) if position != index]
+
+
 def apply_delta(state: dict[str, Any], delta: dict[str, Any]) -> dict[str, Any]:
+    remaining_hypotheses = invalidate_hypothesis(
+        list(state.get("hypotheses", [])), delta.get("invalidate_hypothesis")
+    )
+    next_hypotheses = (
+        append_unique_hypothesis(remaining_hypotheses, delta["add_hypothesis"])
+        if "add_hypothesis" in delta
+        else remaining_hypotheses
+    )
+
     next_state = {
         "focus": delta.get("set_focus", state.get("focus")),
         "threads": list(state.get("threads", [])),
         "constraints": list(state.get("constraints", [])),
+        "hypotheses": next_hypotheses,
         "recent": list(state.get("recent", [])),
         "next": list(state.get("next", [])) if state.get("next") is not None else None,
     }
@@ -506,6 +642,16 @@ def validate_final_state(state: dict[str, Any]) -> dict[str, Any]:
     if constraints_error is not None:
         raise ValueError(f"Computed state is invalid: constraints {constraints_error}")
 
+    hypotheses_value = state.get("hypotheses", [])
+    if not isinstance(hypotheses_value, list):
+        raise ValueError("Computed state is invalid: hypotheses must be an array")
+    if len(hypotheses_value) > 8:
+        raise ValueError("Computed state is invalid: hypotheses must contain at most 8 items")
+    for hypothesis in hypotheses_value:
+        error = _validate_hypothesis_record(hypothesis)
+        if error is not None:
+            raise ValueError(f"Computed state is invalid: hypotheses {error}")
+
     recent_error = _validate_string_array(state.get("recent", []), max_items=5, max_length=200)
     if recent_error is not None:
         raise ValueError(f"Computed state is invalid: recent {recent_error}")
@@ -522,6 +668,7 @@ def validate_final_state(state: dict[str, Any]) -> dict[str, Any]:
         "focus": focus,
         "threads": list(state.get("threads", [])),
         "constraints": list(state.get("constraints", [])),
+        "hypotheses": [dict(item) for item in hypotheses_value],
         "recent": list(state.get("recent", [])),
         "next": list(next_value),
     }
@@ -534,6 +681,7 @@ def compute_agent_state(delta_path: Path = DELTA_PATH) -> dict[str, Any]:
     state: dict[str, Any] = {
         "threads": [],
         "constraints": [],
+        "hypotheses": [],
         "recent": [],
     }
 
@@ -557,11 +705,22 @@ def compute_agent_state(delta_path: Path = DELTA_PATH) -> dict[str, Any]:
 
 
 def format_state_context(state: dict[str, Any]) -> str:
+    hypotheses = state.get("hypotheses", [])
+    if hypotheses:
+        lines = "\n".join(
+            f"{index}. {item['hypothesis']}\n   Invalidated by: {item['invalidated_by']}"
+            for index, item in enumerate(hypotheses, start=1)
+        )
+        hypotheses_section = f"ACTIVE HYPOTHESES:\n{lines}\n\n"
+    else:
+        hypotheses_section = "ACTIVE HYPOTHESES:\n- None\n\n"
+
     return (
         f"{CONTEXT_PREFIX}\n\n"
         "This is your current working state. You are CONTINUING from this state -- not starting fresh.\n\n"
         "STATE:\n"
         f"{json.dumps(state, indent=2, ensure_ascii=False)}\n\n"
+        f"{hypotheses_section}"
         "You MUST maintain this state as you work.\n\n"
         "Call the delta tool IMMEDIATELY if any of the following become true:\n"
         "- The focus changes or sharpens\n"

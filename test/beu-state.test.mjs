@@ -49,6 +49,28 @@ test('validateStateDelta accepts string shorthand for array fields', () => {
   );
 });
 
+test('validateStateDelta requires both fields for add_hypothesis', () => {
+  assert.equal(
+    validateStateDelta({
+      add_hypothesis: {
+        hypothesis: 'The failure only happens in Codex SessionStart hooks',
+      },
+    }),
+    'add_hypothesis: invalidated_by must be a non-empty string'
+  );
+});
+
+test('validateStateDelta requires index and reason for invalidate_hypothesis', () => {
+  assert.equal(
+    validateStateDelta({
+      invalidate_hypothesis: {
+        index: 0,
+      },
+    }),
+    'invalidate_hypothesis: index: must be between 1 and 9007199254740991'
+  );
+});
+
 test('normalizeDelta converts string shorthand to canonical array fields', () => {
   assert.deepEqual(
     normalizeDelta({
@@ -193,6 +215,7 @@ test('computeAgentState heals string shorthand from existing delta logs', async 
     focus: 'Update vault',
     threads: ['confirm player repos'],
     constraints: [],
+    hypotheses: [],
     recent: ['Player repos confirmed'],
     next: ['continue vault update'],
   });
@@ -254,6 +277,7 @@ test('computeAgentState removes threads added and removed in the same delta and 
     focus: 'Keep host behavior aligned',
     threads: ['share schema'],
     constraints: ['single storage path'],
+    hypotheses: [],
     recent: [
       'covered validation',
       'covered append writes',
@@ -263,6 +287,84 @@ test('computeAgentState removes threads added and removed in the same delta and 
     ],
     next: ['review remaining gaps'],
   });
+});
+
+test('computeAgentState keeps only active hypotheses after invalidation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-state-hypotheses-'));
+  const deltaPath = join(root, 'deltas.jsonl');
+
+  await writeFile(
+    deltaPath,
+    [
+      JSON.stringify({
+        set_focus: 'Debug SessionStart recovery',
+        add_hypothesis: {
+          hypothesis: 'The hook is emitting non-JSON output',
+          invalidated_by: 'The exact hook command parses as valid JSON',
+        },
+        set_next: ['reproduce the failure'],
+      }),
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'Hermes prompt formatting drift is causing the mismatch',
+          invalidated_by: 'Hermes and TypeScript formatters are byte-for-byte aligned',
+        },
+      }),
+      JSON.stringify({
+        invalidate_hypothesis: {
+          index: 1,
+          reason: 'The exact live hook command parsed as valid JSON after the installer update',
+        },
+        add_recent: ['verified the hook output'],
+      }),
+    ].join('\n'),
+    'utf8'
+  );
+
+  assert.deepEqual(await computeAgentState(deltaPath), {
+    focus: 'Debug SessionStart recovery',
+    threads: [],
+    constraints: [],
+    hypotheses: [
+      {
+        hypothesis: 'Hermes prompt formatting drift is causing the mismatch',
+        invalidated_by: 'Hermes and TypeScript formatters are byte-for-byte aligned',
+      },
+    ],
+    recent: ['verified the hook output'],
+    next: ['reproduce the failure'],
+  });
+});
+
+test('computeAgentState rejects invalidated hypothesis indexes outside the active range', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-state-hypothesis-range-'));
+  const deltaPath = join(root, 'deltas.jsonl');
+
+  await writeFile(
+    deltaPath,
+    [
+      JSON.stringify({
+        set_focus: 'Track active hypotheses',
+        add_hypothesis: {
+          hypothesis: 'State is stale',
+          invalidated_by: 'A recomputation matches the current workspace',
+        },
+        set_next: ['test invalidation'],
+      }),
+      JSON.stringify({
+        invalidate_hypothesis: {
+          index: 2,
+          reason: 'No second hypothesis was active',
+        },
+      }),
+    ].join('\n'),
+    'utf8'
+  );
+
+  await assert.rejects(
+    computeAgentState(deltaPath),
+    /invalidate_hypothesis index 2 is out of range for 1 active hypothesis/
+  );
 });
 
 test('computeAgentState rejects a final state that never sets next actions', async () => {

@@ -5,7 +5,7 @@
   "type": "object",
   "additionalProperties": false,
 
-  "required": ["focus", "threads", "constraints", "recent", "next"],
+  "required": ["focus", "threads", "constraints", "hypotheses", "recent", "next"],
 
   "properties": {
     "focus": {
@@ -37,6 +37,31 @@
       "maxItems": 8,
       "uniqueItems": true,
       "description": "Things that must remain true or cannot be violated"
+    },
+
+    "hypotheses": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "Active working hypotheses that have not been invalidated",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hypothesis", "invalidated_by"],
+        "properties": {
+          "hypothesis": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The active working hypothesis"
+          },
+          "invalidated_by": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "What observation would invalidate the hypothesis"
+          }
+        }
+      }
     },
 
     "recent": {

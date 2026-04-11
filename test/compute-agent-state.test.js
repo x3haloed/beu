@@ -4,8 +4,22 @@ const { mkdtemp, mkdir, writeFile } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { spawn } = require('node:child_process');
+const { build } = require('esbuild');
 
-const CLI_PATH = join(__dirname, '..', 'dist', 'compute-agent-state.js');
+let CLI_PATH;
+
+test.before(async () => {
+  const buildRoot = await mkdtemp(join(tmpdir(), 'beu-compute-cli-'));
+  CLI_PATH = join(buildRoot, 'compute-agent-state.js');
+
+  await build({
+    entryPoints: [join(__dirname, '..', 'src', 'compute-agent-state.ts')],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    outfile: CLI_PATH,
+  });
+});
 
 function runCli(cwd, deltaPath) {
   return new Promise((resolve) => {
@@ -44,12 +58,24 @@ test('computes the current agent state from accumulated deltas', async () => {
         set_focus: 'Ship current state tool',
         add_threads: ['design CLI', 'verify folding'],
         add_constraints: ['must stay schema-valid'],
+        add_hypothesis: {
+          hypothesis: 'The CLI should print the same state across hosts',
+          invalidated_by: 'Two hosts compute different state from the same delta log',
+        },
         add_recent: ['created failing test'],
         set_next: ['implement CLI'],
       }),
       JSON.stringify({
         add_threads: ['wire build'],
         remove_threads: ['design CLI'],
+        invalidate_hypothesis: {
+          index: 1,
+          reason: 'The shared state module now drives every host integration',
+        },
+        add_hypothesis: {
+          hypothesis: 'Codex SessionStart output still needs a JSON mode',
+          invalidated_by: 'The hook command emits a valid SessionStart JSON payload',
+        },
         add_recent: [
           'implemented fold logic',
           'trimmed recent list',
@@ -79,6 +105,12 @@ ${JSON.stringify(
         focus: 'Ship current state tool',
         threads: ['verify folding', 'wire build'],
         constraints: ['must stay schema-valid'],
+        hypotheses: [
+          {
+            hypothesis: 'Codex SessionStart output still needs a JSON mode',
+            invalidated_by: 'The hook command emits a valid SessionStart JSON payload',
+          },
+        ],
         recent: [
           'implemented fold logic',
           'trimmed recent list',
@@ -91,6 +123,10 @@ ${JSON.stringify(
       null,
       2
     )}
+
+ACTIVE HYPOTHESES:
+1. Codex SessionStart output still needs a JSON mode
+   Invalidated by: The hook command emits a valid SessionStart JSON payload
 
 You MUST maintain this state as you work.
 
@@ -108,6 +144,10 @@ If failing to update this state would cause future steps to go in the wrong dire
 you MUST call delta.
 
 Otherwise, continue without calling it.
+
+[SURVEY PROTOCOL]
+Before responding to the user, call \`orientation_survey\` exactly once for this session.
+Use it only now to record startup orientation metrics.
 `
   );
 });

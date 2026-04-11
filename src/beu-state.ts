@@ -7,6 +7,8 @@ export type StateDelta = {
   add_threads?: string[];
   remove_threads?: string[];
   add_constraints?: string[];
+  add_hypothesis?: HypothesisRecord;
+  invalidate_hypothesis?: HypothesisInvalidation;
   add_recent?: string[];
   set_next?: string[];
 };
@@ -16,14 +18,27 @@ export type LooseStateDelta = {
   add_threads?: string | string[];
   remove_threads?: string | string[];
   add_constraints?: string | string[];
+  add_hypothesis?: HypothesisRecord;
+  invalidate_hypothesis?: HypothesisInvalidation;
   add_recent?: string | string[];
   set_next?: string | string[];
+};
+
+export type HypothesisRecord = {
+  hypothesis: string;
+  invalidated_by: string;
+};
+
+export type HypothesisInvalidation = {
+  index: number;
+  reason: string;
 };
 
 export type AgentState = {
   focus: string;
   threads: string[];
   constraints: string[];
+  hypotheses: HypothesisRecord[];
   recent: string[];
   next: string[];
 };
@@ -47,6 +62,7 @@ type PendingState = {
   focus?: string;
   threads: string[];
   constraints: string[];
+  hypotheses: HypothesisRecord[];
   recent: string[];
   next?: string[];
 };
@@ -68,7 +84,13 @@ type StringArrayFieldSpec = {
   maxItems?: number;
 };
 
-type StateDeltaFieldSpec = StringFieldSpec | StringArrayFieldSpec;
+type ObjectFieldSpec = {
+  kind: 'object';
+  description: string;
+  schema: Record<string, unknown>;
+};
+
+type StateDeltaFieldSpec = StringFieldSpec | StringArrayFieldSpec | ObjectFieldSpec;
 
 export const DELTA_PATH = join(homedir(), '.beu', 'state', 'deltas.jsonl');
 export const SURVEY_PATH = join(homedir(), '.beu', 'state', 'surveys.jsonl');
@@ -127,6 +149,52 @@ export const STATE_DELTA_FIELDS = {
     itemMaxLength: 200,
     unique: true,
     description: 'Add newly discovered constraints or invariants',
+  },
+  add_hypothesis: {
+    kind: 'object',
+    description:
+      'Record a strong, falsifiable belief about the user, agent, environment, or working context that you are relying on. If you act on it, you must record the concrete evidence that would prove it wrong.',
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['hypothesis', 'invalidated_by'],
+      properties: {
+        hypothesis: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 200,
+          description: 'The strong, falsifiable belief you are relying on',
+        },
+        invalidated_by: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 200,
+          description: 'The concrete evidence that would prove this belief wrong',
+        },
+      },
+    },
+  },
+  invalidate_hypothesis: {
+    kind: 'object',
+    description: 'Invalidate an active hypothesis by its 1-based displayed index, with the reason it was invalidated',
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['index', 'reason'],
+      properties: {
+        index: {
+          type: 'integer',
+          minimum: 1,
+          description: '1-based index from the currently displayed active hypothesis list',
+        },
+        reason: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 200,
+          description: 'Why the hypothesis was found to be invalid',
+        },
+      },
+    },
   },
   add_recent: {
     kind: 'string[]',
@@ -234,6 +302,10 @@ export function createStateDeltaJsonSchemaProperties() {
             description: spec.description,
           },
         ];
+      }
+
+      if (spec.kind === 'object') {
+        return [key, { ...spec.schema, description: spec.description }];
       }
 
       const arraySpec = spec as StringArrayFieldSpec;
@@ -385,6 +457,48 @@ function validateIntegerInRange(value: unknown, minimum: number, maximum: number
   return null;
 }
 
+function validateHypothesisRecord(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return 'must be an object';
+  }
+
+  if (!isNonEmptyString(value.hypothesis)) {
+    return 'hypothesis must be a non-empty string';
+  }
+  if (value.hypothesis.length > 200) {
+    return 'hypothesis must be at most 200 characters long';
+  }
+
+  if (!isNonEmptyString(value.invalidated_by)) {
+    return 'invalidated_by must be a non-empty string';
+  }
+  if (value.invalidated_by.length > 200) {
+    return 'invalidated_by must be at most 200 characters long';
+  }
+
+  return null;
+}
+
+function validateHypothesisInvalidation(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return 'must be an object';
+  }
+
+  const indexError = validateIntegerInRange(value.index, 1, Number.MAX_SAFE_INTEGER);
+  if (indexError !== null) {
+    return `index: ${indexError}`;
+  }
+
+  if (!isNonEmptyString(value.reason)) {
+    return 'reason must be a non-empty string';
+  }
+  if (value.reason.length > 200) {
+    return 'reason must be at most 200 characters long';
+  }
+
+  return null;
+}
+
 export function validateStateDelta(value: unknown): string | null {
   const normalizedValue = normalizeDelta(value);
   if (!isRecord(normalizedValue)) {
@@ -435,6 +549,16 @@ export function validateStateDelta(value: unknown): string | null {
       maxLength: STATE_DELTA_FIELDS.add_constraints.itemMaxLength,
     });
     if (error !== null) return `add_constraints: ${error}`;
+  }
+
+  if ('add_hypothesis' in normalizedValue) {
+    const error = validateHypothesisRecord(normalizedValue.add_hypothesis);
+    if (error !== null) return `add_hypothesis: ${error}`;
+  }
+
+  if ('invalidate_hypothesis' in normalizedValue) {
+    const error = validateHypothesisInvalidation(normalizedValue.invalidate_hypothesis);
+    if (error !== null) return `invalidate_hypothesis: ${error}`;
   }
 
   if ('add_recent' in normalizedValue) {
@@ -562,7 +686,42 @@ function appendUnique(existing: string[], additions: string[]): string[] {
   return nextValues;
 }
 
+function appendUniqueHypothesis(existing: HypothesisRecord[], addition: HypothesisRecord): HypothesisRecord[] {
+  if (
+    existing.some(
+      (item) => item.hypothesis === addition.hypothesis && item.invalidated_by === addition.invalidated_by
+    )
+  ) {
+    return [...existing];
+  }
+
+  return [...existing, addition];
+}
+
+function invalidateHypothesis(
+  hypotheses: HypothesisRecord[],
+  invalidation: HypothesisInvalidation | undefined
+): HypothesisRecord[] {
+  if (invalidation === undefined) {
+    return [...hypotheses];
+  }
+
+  if (invalidation.index > hypotheses.length) {
+    throw new Error(
+      `Computed state is invalid: invalidate_hypothesis index ${invalidation.index} is out of range for ${hypotheses.length} active hypothesis${hypotheses.length === 1 ? '' : 'es'}`
+    );
+  }
+
+  return hypotheses.filter((_, index) => index !== invalidation.index - 1);
+}
+
 function applyDelta(state: PendingState, delta: StateDelta): PendingState {
+  const remainingHypotheses = invalidateHypothesis(state.hypotheses, delta.invalidate_hypothesis);
+  const nextHypotheses =
+    delta.add_hypothesis !== undefined
+      ? appendUniqueHypothesis(remainingHypotheses, delta.add_hypothesis)
+      : remainingHypotheses;
+
   return {
     focus: delta.set_focus ?? state.focus,
     threads:
@@ -577,6 +736,7 @@ function applyDelta(state: PendingState, delta: StateDelta): PendingState {
       delta.add_constraints !== undefined
         ? appendUnique(state.constraints, delta.add_constraints)
         : [...state.constraints],
+    hypotheses: nextHypotheses,
     recent:
       delta.add_recent !== undefined
         ? [...state.recent, ...delta.add_recent].slice(-5)
@@ -612,6 +772,19 @@ function validateFinalState(state: PendingState): AgentState {
     throw new Error(`Computed state is invalid: constraints ${constraintsError}`);
   }
 
+  if (!Array.isArray(state.hypotheses)) {
+    throw new Error('Computed state is invalid: hypotheses must be an array');
+  }
+  if (state.hypotheses.length > 8) {
+    throw new Error('Computed state is invalid: hypotheses must contain at most 8 items');
+  }
+  for (const hypothesis of state.hypotheses) {
+    const error = validateHypothesisRecord(hypothesis);
+    if (error !== null) {
+      throw new Error(`Computed state is invalid: hypotheses ${error}`);
+    }
+  }
+
   const recentError = validateStringArray(state.recent, {
     maxItems: 5,
     maxLength: 200,
@@ -637,6 +810,7 @@ function validateFinalState(state: PendingState): AgentState {
     focus: state.focus,
     threads: state.threads,
     constraints: state.constraints,
+    hypotheses: state.hypotheses,
     recent: state.recent,
     next: state.next,
   };
@@ -649,6 +823,7 @@ export async function computeAgentState(deltaPath: string): Promise<AgentState> 
   let state: PendingState = {
     threads: [],
     constraints: [],
+    hypotheses: [],
     recent: [],
   };
 
@@ -680,6 +855,16 @@ export async function computeAgentState(deltaPath: string): Promise<AgentState> 
 }
 
 export function formatStateContext(state: AgentState): string {
+  const hypothesesSection =
+    state.hypotheses.length === 0
+      ? 'ACTIVE HYPOTHESES:\n- None\n\n'
+      : `ACTIVE HYPOTHESES:\n${state.hypotheses
+          .map(
+            (item, index) =>
+              `${index + 1}. ${item.hypothesis}\n   Invalidated by: ${item.invalidated_by}`
+          )
+          .join('\n')}\n\n`;
+
   return `${CONTEXT_PREFIX}
 
 This is your current working state. You are CONTINUING from this state — not starting fresh.
@@ -687,7 +872,7 @@ This is your current working state. You are CONTINUING from this state — not s
 STATE:
 ${JSON.stringify(state, null, 2)}
 
-You MUST maintain this state as you work.
+${hypothesesSection}You MUST maintain this state as you work.
 
 Call the delta tool IMMEDIATELY if any of the following become true:
 - The focus changes or sharpens

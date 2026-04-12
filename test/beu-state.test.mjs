@@ -19,9 +19,12 @@ await build({
 });
 
 const {
+  appendConstraintCompression,
+  appendHypothesisCompression,
   appendOrientationSurvey,
   appendStateDelta,
   computeAgentState,
+  formatStateContext,
   normalizeDelta,
   validateOrientationSurvey,
   validateStateDelta,
@@ -44,6 +47,16 @@ test('validateStateDelta accepts string shorthand for array fields', () => {
       set_focus: 'Update vault with new answers',
       add_recent: 'Player repos confirmed',
       set_next: 'record answer',
+    }),
+    null
+  );
+});
+
+test('validateStateDelta accepts compression deltas', () => {
+  assert.equal(
+    validateStateDelta({
+      remove_constraints: ['old invariant'],
+      add_constraints: ['compressed invariant'],
     }),
     null
   );
@@ -77,6 +90,7 @@ test('normalizeDelta converts string shorthand to canonical array fields', () =>
       add_threads: 'GCS migration',
       remove_threads: 'old migration note',
       add_constraints: 'player repos confirmed',
+      remove_constraints: 'old invariant',
       add_recent: 'updated vault',
       set_next: 'continue implementation',
     }),
@@ -84,6 +98,7 @@ test('normalizeDelta converts string shorthand to canonical array fields', () =>
       add_threads: ['GCS migration'],
       remove_threads: ['old migration note'],
       add_constraints: ['player repos confirmed'],
+      remove_constraints: ['old invariant'],
       add_recent: ['updated vault'],
       set_next: ['continue implementation'],
     }
@@ -137,6 +152,39 @@ test('appendStateDelta writes canonical arrays for string shorthand fields', asy
       set_next: ['record answer'],
     })}\n`
   );
+});
+
+test('appendStateDelta injects thread removals when adding threads would overflow', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-state-thread-trim-'));
+  const deltaPath = join(root, '.beu', 'state', 'deltas.jsonl');
+
+  await appendStateDelta(
+    {
+      set_focus: 'Trim threads',
+      add_threads: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+      set_next: ['continue'],
+    },
+    deltaPath
+  );
+
+  await appendStateDelta(
+    {
+      add_threads: ['h', 'i'],
+    },
+    deltaPath
+  );
+
+  const lines = (await readFile(deltaPath, 'utf8')).trim().split(/\r?\n/);
+  assert.match(lines[1], /"remove_threads":\["a"\]/);
+
+  assert.deepEqual(await computeAgentState(deltaPath), {
+    focus: 'Trim threads',
+    threads: ['b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'],
+    constraints: [],
+    hypotheses: [],
+    recent: [],
+    next: ['continue'],
+  });
 });
 
 test('appendStateDelta rejects invalid deltas without writing a file', async () => {
@@ -218,6 +266,31 @@ test('computeAgentState heals string shorthand from existing delta logs', async 
     hypotheses: [],
     recent: ['Player repos confirmed'],
     next: ['continue vault update'],
+  });
+});
+
+test('computeAgentState trims recent history and next actions to the newest entries', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-state-trim-'));
+  const deltaPath = join(root, 'deltas.jsonl');
+
+  await writeFile(
+    deltaPath,
+    JSON.stringify({
+      set_focus: 'Trim all the things',
+      add_threads: ['thread 1', 'thread 2', 'thread 3', 'thread 4', 'thread 5', 'thread 6', 'thread 7', 'thread 8', 'thread 9'],
+      add_recent: ['r1', 'r2', 'r3', 'r4', 'r5', 'r6'],
+      set_next: ['n1', 'n2', 'n3', 'n4', 'n5', 'n6'],
+    }) + '\n',
+    'utf8'
+  );
+
+  assert.deepEqual(await computeAgentState(deltaPath), {
+    focus: 'Trim all the things',
+    threads: ['thread 2', 'thread 3', 'thread 4', 'thread 5', 'thread 6', 'thread 7', 'thread 8', 'thread 9'],
+    constraints: [],
+    hypotheses: [],
+    recent: ['r2', 'r3', 'r4', 'r5', 'r6'],
+    next: ['n2', 'n3', 'n4', 'n5', 'n6'],
   });
 });
 
@@ -333,6 +406,175 @@ test('computeAgentState keeps only active hypotheses after invalidation', async 
     ],
     recent: ['verified the hook output'],
     next: ['reproduce the failure'],
+  });
+});
+
+test('computeAgentState asks for hypothesis compression when hypotheses reach capacity', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-state-hypothesis-compress-note-'));
+  const deltaPath = join(root, 'deltas.jsonl');
+
+  await writeFile(
+    deltaPath,
+    JSON.stringify({
+      set_focus: 'Keep hypotheses compact',
+      set_next: ['compress hypotheses'],
+      add_hypothesis: {
+        hypothesis: 'hypothesis 1',
+        invalidated_by: 'evidence 1',
+      },
+    }) + '\n' +
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 2',
+          invalidated_by: 'evidence 2',
+        },
+      }) + '\n' +
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 3',
+          invalidated_by: 'evidence 3',
+        },
+      }) + '\n' +
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 4',
+          invalidated_by: 'evidence 4',
+        },
+      }) + '\n' +
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 5',
+          invalidated_by: 'evidence 5',
+        },
+      }) + '\n' +
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 6',
+          invalidated_by: 'evidence 6',
+        },
+      }) + '\n' +
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 7',
+          invalidated_by: 'evidence 7',
+        },
+      }) + '\n' +
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 8',
+          invalidated_by: 'evidence 8',
+        },
+      }) + '\n',
+    'utf8'
+  );
+
+  const state = await computeAgentState(deltaPath);
+  const context = formatStateContext(state);
+
+  assert.equal(state.hypotheses.length, 8);
+  assert.match(context, /HYPOTHESIS COMPACTION REQUIRED:/);
+  assert.match(context, /call `compress`/);
+  assert.doesNotMatch(context, /CONSTRAINT COMPACTION REQUIRED:/);
+});
+
+test('appendHypothesisCompression replaces the current hypotheses with one compressed hypothesis', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-state-hypothesis-compress-write-'));
+  const deltaPath = join(root, 'deltas.jsonl');
+
+  await writeFile(
+    deltaPath,
+    [
+      JSON.stringify({
+        set_focus: 'Keep hypotheses compact',
+        set_next: ['compress hypotheses'],
+        add_hypothesis: {
+          hypothesis: 'hypothesis 1',
+          invalidated_by: 'evidence 1',
+        },
+      }),
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 2',
+          invalidated_by: 'evidence 2',
+        },
+      }),
+    ].join('\n') + '\n',
+    'utf8'
+  );
+
+  await appendHypothesisCompression('compressed summary hypothesis', deltaPath);
+
+  assert.deepEqual(await computeAgentState(deltaPath), {
+    focus: 'Keep hypotheses compact',
+    threads: [],
+    constraints: [],
+    hypotheses: [
+      {
+        hypothesis: 'compressed summary hypothesis',
+        invalidated_by: 'Evidence that the compressed summary no longer captures the active hypotheses.',
+      },
+    ],
+    recent: [],
+    next: ['compress hypotheses'],
+  });
+});
+
+test('computeAgentState asks for compression when constraints reach capacity', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-state-compress-note-'));
+  const deltaPath = join(root, 'deltas.jsonl');
+
+  await writeFile(
+    deltaPath,
+    JSON.stringify({
+      set_focus: 'Keep state compact',
+      add_constraints: [
+        'constraint 1',
+        'constraint 2',
+        'constraint 3',
+        'constraint 4',
+        'constraint 5',
+        'constraint 6',
+        'constraint 7',
+        'constraint 8',
+      ],
+      set_next: ['compress constraints'],
+    }),
+    'utf8'
+  );
+
+  const state = await computeAgentState(deltaPath);
+  const context = formatStateContext(state);
+
+  assert.equal(state.constraints.length, 8);
+  assert.match(context, /CONSTRAINT COMPACTION REQUIRED:/);
+  assert.match(context, /call `compress`/);
+});
+
+test('appendConstraintCompression replaces the current constraints with one compressed constraint', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'beu-state-compress-write-'));
+  const deltaPath = join(root, 'deltas.jsonl');
+
+  await writeFile(
+    deltaPath,
+    [
+      JSON.stringify({
+        set_focus: 'Keep state compact',
+        add_constraints: ['old invariant 1', 'old invariant 2'],
+        set_next: ['compress constraints'],
+      }),
+    ].join('\n') + '\n',
+    'utf8'
+  );
+
+  await appendConstraintCompression('compressed invariant', deltaPath);
+
+  assert.deepEqual(await computeAgentState(deltaPath), {
+    focus: 'Keep state compact',
+    threads: [],
+    constraints: ['compressed invariant'],
+    hypotheses: [],
+    recent: [],
+    next: ['compress constraints'],
   });
 });
 

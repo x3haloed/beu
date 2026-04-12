@@ -152,6 +152,109 @@ Use it only now to record startup orientation metrics.
   );
 });
 
+test('emits compaction instructions when constraints reach capacity', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'beu-state-compress-'));
+  const stateDir = join(cwd, '.beu', 'state');
+  const deltaPath = join(stateDir, 'deltas.jsonl');
+
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(
+    deltaPath,
+    JSON.stringify({
+      set_focus: 'Keep state compact',
+      add_constraints: [
+        'constraint 1',
+        'constraint 2',
+        'constraint 3',
+        'constraint 4',
+        'constraint 5',
+        'constraint 6',
+        'constraint 7',
+        'constraint 8',
+      ],
+      set_next: ['compress constraints'],
+    }),
+    'utf8'
+  );
+
+  const result = await runCli(cwd, deltaPath);
+
+  assert.equal(result.code, 0, `stderr: ${result.stderr}`);
+  assert.match(result.stdout, /CONSTRAINT COMPACTION REQUIRED:/);
+  assert.match(result.stdout, /call `compress`/);
+});
+
+test('emits hypothesis compaction instructions when hypotheses reach capacity', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'beu-hypothesis-compress-'));
+  const stateDir = join(cwd, '.beu', 'state');
+  const deltaPath = join(stateDir, 'deltas.jsonl');
+
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(
+    deltaPath,
+    [
+      JSON.stringify({
+        set_focus: 'Keep hypotheses compact',
+        set_next: ['compress hypotheses'],
+        add_hypothesis: {
+          hypothesis: 'hypothesis 1',
+          invalidated_by: 'evidence 1',
+        },
+      }),
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 2',
+          invalidated_by: 'evidence 2',
+        },
+      }),
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 3',
+          invalidated_by: 'evidence 3',
+        },
+      }),
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 4',
+          invalidated_by: 'evidence 4',
+        },
+      }),
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 5',
+          invalidated_by: 'evidence 5',
+        },
+      }),
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 6',
+          invalidated_by: 'evidence 6',
+        },
+      }),
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 7',
+          invalidated_by: 'evidence 7',
+        },
+      }),
+      JSON.stringify({
+        add_hypothesis: {
+          hypothesis: 'hypothesis 8',
+          invalidated_by: 'evidence 8',
+        },
+      }),
+    ].join('\n') + '\n',
+    'utf8'
+  );
+
+  const result = await runCli(cwd, deltaPath);
+
+  assert.equal(result.code, 0, `stderr: ${result.stderr}`);
+  assert.match(result.stdout, /HYPOTHESIS COMPACTION REQUIRED:/);
+  assert.match(result.stdout, /call `compress`/);
+  assert.doesNotMatch(result.stdout, /CONSTRAINT COMPACTION REQUIRED:/);
+});
+
 test('can emit Codex SessionStart hook JSON output', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'beu-codex-hook-'));
   const stateDir = join(cwd, '.beu', 'state');

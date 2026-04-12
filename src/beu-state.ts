@@ -7,6 +7,7 @@ export type StateDelta = {
   add_threads?: string[];
   remove_threads?: string[];
   add_constraints?: string[];
+  remove_constraints?: string[];
   add_hypothesis?: HypothesisRecord;
   invalidate_hypothesis?: HypothesisInvalidation;
   add_recent?: string[];
@@ -18,6 +19,7 @@ export type LooseStateDelta = {
   add_threads?: string | string[];
   remove_threads?: string | string[];
   add_constraints?: string | string[];
+  remove_constraints?: string | string[];
   add_hypothesis?: HypothesisRecord;
   invalidate_hypothesis?: HypothesisInvalidation;
   add_recent?: string | string[];
@@ -72,6 +74,7 @@ type StringFieldSpec = {
   minLength: number;
   maxLength: number;
   description: string;
+  hidden?: boolean;
 };
 
 type StringArrayFieldSpec = {
@@ -82,12 +85,14 @@ type StringArrayFieldSpec = {
   unique?: boolean;
   minItems?: number;
   maxItems?: number;
+  hidden?: boolean;
 };
 
 type ObjectFieldSpec = {
   kind: 'object';
   description: string;
   schema: Record<string, unknown>;
+  hidden?: boolean;
 };
 
 type StateDeltaFieldSpec = StringFieldSpec | StringArrayFieldSpec | ObjectFieldSpec;
@@ -121,6 +126,11 @@ Omit any field you cannot answer.
 export const ORIENTATION_SURVEY_SESSION_START_INSTRUCTION = `[SURVEY PROTOCOL]
 Before responding to the user, call \`orientation_survey\` exactly once for this session.
 Use it only now to record startup orientation metrics.`;
+export const COMPRESS_TOOL_DESCRIPTION = `
+Compact constraints or hypotheses when their active set reaches capacity.
+
+When invoked, provide exactly one non-empty string in the payload shape appropriate to the overloaded field.
+`;
 
 export const STATE_DELTA_FIELDS = {
   set_focus: {
@@ -149,6 +159,14 @@ export const STATE_DELTA_FIELDS = {
     itemMaxLength: 200,
     unique: true,
     description: 'Add newly discovered constraints or invariants',
+  },
+  remove_constraints: {
+    kind: 'string[]',
+    itemMinLength: 1,
+    itemMaxLength: 200,
+    unique: true,
+    description: 'Remove constraints from the current state',
+    hidden: true,
   },
   add_hypothesis: {
     kind: 'object',
@@ -200,7 +218,6 @@ export const STATE_DELTA_FIELDS = {
     kind: 'string[]',
     itemMinLength: 1,
     itemMaxLength: 200,
-    maxItems: 5,
     description: 'Append recent meaningful steps (will be truncated in state)',
   },
   set_next: {
@@ -213,7 +230,9 @@ export const STATE_DELTA_FIELDS = {
 } as const;
 
 export const STATE_DELTA_FIELD_DESCRIPTIONS = Object.fromEntries(
-  Object.entries(STATE_DELTA_FIELDS).map(([key, spec]) => [key, spec.description])
+  Object.entries(STATE_DELTA_FIELDS)
+    .filter(([, spec]) => !spec.hidden)
+    .map(([key, spec]) => [key, spec.description])
 ) as Record<keyof typeof STATE_DELTA_FIELDS, string>;
 
 export const ORIENTATION_SURVEY_FIELDS = {
@@ -291,49 +310,51 @@ export const ORIENTATION_SURVEY_FIELDS = {
 
 export function createStateDeltaJsonSchemaProperties() {
   return Object.fromEntries(
-    Object.entries(STATE_DELTA_FIELDS).map(([key, spec]) => {
-      if (spec.kind === 'string') {
+    Object.entries(STATE_DELTA_FIELDS)
+      .filter(([, spec]) => !spec.hidden)
+      .map(([key, spec]) => {
+        if (spec.kind === 'string') {
+          return [
+            key,
+            {
+              type: 'string',
+              minLength: spec.minLength,
+              maxLength: spec.maxLength,
+              description: spec.description,
+            },
+          ];
+        }
+
+        if (spec.kind === 'object') {
+          return [key, { ...spec.schema, description: spec.description }];
+        }
+
+        const arraySpec = spec as StringArrayFieldSpec;
         return [
           key,
           {
-            type: 'string',
-            minLength: spec.minLength,
-            maxLength: spec.maxLength,
-            description: spec.description,
-          },
-        ];
-      }
-
-      if (spec.kind === 'object') {
-        return [key, { ...spec.schema, description: spec.description }];
-      }
-
-      const arraySpec = spec as StringArrayFieldSpec;
-      return [
-        key,
-        {
-          anyOf: [
-            {
-              type: 'string',
-              minLength: arraySpec.itemMinLength,
-              maxLength: arraySpec.itemMaxLength,
-            },
-            {
-              type: 'array',
-              items: {
+            anyOf: [
+              {
                 type: 'string',
                 minLength: arraySpec.itemMinLength,
                 maxLength: arraySpec.itemMaxLength,
               },
-              ...(arraySpec.unique ? { uniqueItems: true } : {}),
-              ...(typeof arraySpec.minItems === 'number' ? { minItems: arraySpec.minItems } : {}),
-              ...(typeof arraySpec.maxItems === 'number' ? { maxItems: arraySpec.maxItems } : {}),
-            },
-          ],
-          description: arraySpec.description,
-        },
-      ];
-    })
+              {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  minLength: arraySpec.itemMinLength,
+                  maxLength: arraySpec.itemMaxLength,
+                },
+                ...(arraySpec.unique ? { uniqueItems: true } : {}),
+                ...(typeof arraySpec.minItems === 'number' ? { minItems: arraySpec.minItems } : {}),
+                ...(typeof arraySpec.maxItems === 'number' ? { maxItems: arraySpec.maxItems } : {}),
+              },
+            ],
+            description: arraySpec.description,
+          },
+        ];
+      })
   );
 }
 
@@ -551,6 +572,14 @@ export function validateStateDelta(value: unknown): string | null {
     if (error !== null) return `add_constraints: ${error}`;
   }
 
+  if ('remove_constraints' in normalizedValue) {
+    const error = validateStringArray(normalizedValue.remove_constraints, {
+      unique: STATE_DELTA_FIELDS.remove_constraints.unique,
+      maxLength: STATE_DELTA_FIELDS.remove_constraints.itemMaxLength,
+    });
+    if (error !== null) return `remove_constraints: ${error}`;
+  }
+
   if ('add_hypothesis' in normalizedValue) {
     const error = validateHypothesisRecord(normalizedValue.add_hypothesis);
     if (error !== null) return `add_hypothesis: ${error}`;
@@ -686,6 +715,15 @@ function appendUnique(existing: string[], additions: string[]): string[] {
   return nextValues;
 }
 
+function removeMany(existing: string[], removals: string[]): string[] {
+  if (removals.length === 0) {
+    return [...existing];
+  }
+
+  const removed = new Set(removals);
+  return existing.filter((item) => !removed.has(item));
+}
+
 function appendUniqueHypothesis(existing: HypothesisRecord[], addition: HypothesisRecord): HypothesisRecord[] {
   if (
     existing.some(
@@ -715,6 +753,56 @@ function invalidateHypothesis(
   return hypotheses.filter((_, index) => index !== invalidation.index - 1);
 }
 
+const CONSTRAINT_COMPRESSION_LIMIT = 8;
+const HYPOTHESIS_COMPRESSION_LIMIT = 8;
+const THREAD_LIMIT = 8;
+const RECENT_LIMIT = 5;
+const NEXT_LIMIT = 5;
+
+function trimToLimit(values: string[], limit: number): string[] {
+  return values.length > limit ? values.slice(-limit) : [...values];
+}
+
+function applyThreadDelta(threads: string[], delta: StateDelta): string[] {
+  if (delta.remove_threads !== undefined) {
+    return appendUnique(threads, delta.add_threads ?? []).filter(
+      (thread) => !new Set(delta.remove_threads).has(thread)
+    );
+  }
+
+  if (delta.add_threads !== undefined) {
+    return appendUnique(threads, delta.add_threads);
+  }
+
+  return [...threads];
+}
+
+function getConstraintCompressionInstruction(constraints: string[]): string {
+  if (constraints.length < CONSTRAINT_COMPRESSION_LIMIT) {
+    return '';
+  }
+
+  return `CONSTRAINT COMPACTION REQUIRED:
+- Constraints have reached their limit (${constraints.length}/${CONSTRAINT_COMPRESSION_LIMIT}).
+- You MUST call \`compress\` immediately before doing anything else.
+- Pass exactly one non-empty constraint string that compresses all existing constraints into a single invariant.
+
+`;
+}
+
+function getHypothesisCompressionInstruction(hypotheses: HypothesisRecord[]): string {
+  if (hypotheses.length < HYPOTHESIS_COMPRESSION_LIMIT) {
+    return '';
+  }
+
+  return `HYPOTHESIS COMPACTION REQUIRED:
+- Hypotheses have reached their limit (${hypotheses.length}/${HYPOTHESIS_COMPRESSION_LIMIT}).
+- You MUST call \`compress\` immediately before doing anything else.
+- Pass exactly one non-empty hypothesis string that compresses the active hypotheses into a single falsifiable summary.
+
+`;
+}
+
 function applyDelta(state: PendingState, delta: StateDelta): PendingState {
   const remainingHypotheses = invalidateHypothesis(state.hypotheses, delta.invalidate_hypothesis);
   const nextHypotheses =
@@ -724,24 +812,24 @@ function applyDelta(state: PendingState, delta: StateDelta): PendingState {
 
   return {
     focus: delta.set_focus ?? state.focus,
-    threads:
-      delta.remove_threads !== undefined
-        ? appendUnique(state.threads, delta.add_threads ?? []).filter(
-            (thread) => !new Set(delta.remove_threads).has(thread)
-          )
-        : delta.add_threads !== undefined
-          ? appendUnique(state.threads, delta.add_threads)
-          : [...state.threads],
+    threads: trimToLimit(applyThreadDelta(state.threads, delta), THREAD_LIMIT),
     constraints:
-      delta.add_constraints !== undefined
-        ? appendUnique(state.constraints, delta.add_constraints)
-        : [...state.constraints],
+      delta.remove_constraints !== undefined
+        ? appendUnique(removeMany(state.constraints, delta.remove_constraints), delta.add_constraints ?? [])
+        : delta.add_constraints !== undefined
+          ? appendUnique(state.constraints, delta.add_constraints)
+          : [...state.constraints],
     hypotheses: nextHypotheses,
     recent:
       delta.add_recent !== undefined
-        ? [...state.recent, ...delta.add_recent].slice(-5)
+        ? trimToLimit([...state.recent, ...delta.add_recent], RECENT_LIMIT)
         : [...state.recent],
-    next: delta.set_next !== undefined ? [...delta.set_next] : state.next ? [...state.next] : undefined,
+    next:
+      delta.set_next !== undefined
+        ? trimToLimit([...delta.set_next], NEXT_LIMIT)
+        : state.next
+          ? [...state.next]
+          : undefined,
   };
 }
 
@@ -765,7 +853,6 @@ function validateFinalState(state: PendingState): AgentState {
 
   const constraintsError = validateStringArray(state.constraints, {
     unique: true,
-    maxItems: 8,
     maxLength: 200,
   });
   if (constraintsError !== null) {
@@ -774,9 +861,6 @@ function validateFinalState(state: PendingState): AgentState {
 
   if (!Array.isArray(state.hypotheses)) {
     throw new Error('Computed state is invalid: hypotheses must be an array');
-  }
-  if (state.hypotheses.length > 8) {
-    throw new Error('Computed state is invalid: hypotheses must contain at most 8 items');
   }
   for (const hypothesis of state.hypotheses) {
     const error = validateHypothesisRecord(hypothesis);
@@ -855,6 +939,8 @@ export async function computeAgentState(deltaPath: string): Promise<AgentState> 
 }
 
 export function formatStateContext(state: AgentState): string {
+  const compactionInstruction = getConstraintCompressionInstruction(state.constraints);
+  const hypothesisCompactionInstruction = getHypothesisCompressionInstruction(state.hypotheses);
   const hypothesesSection =
     state.hypotheses.length === 0
       ? 'ACTIVE HYPOTHESES:\n- None\n\n'
@@ -874,7 +960,7 @@ ${JSON.stringify(state, null, 2)}
 
 ${hypothesesSection}You MUST maintain this state as you work.
 
-Call the delta tool IMMEDIATELY if any of the following become true:
+${compactionInstruction}${hypothesisCompactionInstruction}Call the delta tool IMMEDIATELY if any of the following become true:
 - The focus changes or sharpens
 - A new thread appears
 - A thread is resolved or irrelevant
@@ -944,6 +1030,36 @@ export async function appendOrientationSurvey(
   return surveyPath;
 }
 
+async function loadCurrentPendingState(deltaPath: string): Promise<PendingState> {
+  try {
+    const state = await computeAgentState(deltaPath);
+    return {
+      focus: state.focus,
+      threads: [...state.threads],
+      constraints: [...state.constraints],
+      hypotheses: [...state.hypotheses],
+      recent: [...state.recent],
+      next: [...state.next],
+    };
+  } catch (error) {
+    const isMissingFile =
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: string }).code === 'ENOENT';
+    if (!isMissingFile) {
+      throw error;
+    }
+
+    return {
+      threads: [],
+      constraints: [],
+      hypotheses: [],
+      recent: [],
+    };
+  }
+}
+
 export async function appendStateDelta(delta: unknown, deltaPath: string = DELTA_PATH): Promise<string> {
   const normalizedDelta = normalizeDelta(delta);
   const validationError = validateStateDelta(normalizedDelta);
@@ -952,7 +1068,89 @@ export async function appendStateDelta(delta: unknown, deltaPath: string = DELTA
     throw new Error(validationError);
   }
 
+  const currentState = await loadCurrentPendingState(deltaPath);
+
+  const threadedState = applyThreadDelta(currentState.threads, normalizedDelta);
+  const threadOverflow = Math.max(0, threadedState.length - THREAD_LIMIT);
+  const writeDelta =
+    threadOverflow > 0
+      ? {
+          ...normalizedDelta,
+          remove_threads: appendUnique(
+            normalizedDelta.remove_threads ?? [],
+            threadedState.slice(0, threadOverflow)
+          ),
+        }
+      : normalizedDelta;
+
   await mkdir(dirname(deltaPath), { recursive: true });
-  await appendFile(deltaPath, `${JSON.stringify(normalizedDelta)}\n`, 'utf8');
+  await appendFile(deltaPath, `${JSON.stringify(writeDelta)}\n`, 'utf8');
+  return deltaPath;
+}
+
+export async function appendHypothesisCompression(
+  compressedHypothesis: unknown,
+  deltaPath: string = DELTA_PATH
+): Promise<string> {
+  if (!isNonEmptyString(compressedHypothesis)) {
+    throw new Error('hypothesis must be a non-empty string');
+  }
+
+  if (compressedHypothesis.length > 200) {
+    throw new Error('hypothesis must be at most 200 characters long');
+  }
+
+  const currentState = await loadCurrentPendingState(deltaPath);
+  const compressionRecord: HypothesisRecord = {
+    hypothesis: compressedHypothesis,
+    invalidated_by: 'Evidence that the compressed summary no longer captures the active hypotheses.',
+  };
+
+  const lines: string[] = [];
+  for (let index = currentState.hypotheses.length; index >= 1; index -= 1) {
+    lines.push(
+      JSON.stringify({
+        invalidate_hypothesis: {
+          index,
+          reason: 'Compressed into a single summary hypothesis.',
+        },
+      })
+    );
+  }
+  lines.push(JSON.stringify({ add_hypothesis: compressionRecord }));
+
+  const writeDelta = `${lines.join('\n')}\n`;
+  await mkdir(dirname(deltaPath), { recursive: true });
+  await appendFile(deltaPath, writeDelta, 'utf8');
+  return deltaPath;
+}
+
+export async function appendConstraintCompression(
+  compressedConstraint: unknown,
+  deltaPath: string = DELTA_PATH
+): Promise<string> {
+  if (!isNonEmptyString(compressedConstraint)) {
+    throw new Error('constraint must be a non-empty string');
+  }
+
+  if (compressedConstraint.length > STATE_DELTA_FIELDS.add_constraints.itemMaxLength) {
+    throw new Error(
+      `constraint must be at most ${STATE_DELTA_FIELDS.add_constraints.itemMaxLength} characters long`
+    );
+  }
+
+  const state = await loadCurrentPendingState(deltaPath);
+  const compressionDelta: StateDelta = {
+    remove_constraints: [...state.constraints],
+    add_constraints: [compressedConstraint],
+  };
+
+  const validationError = validateStateDelta(compressionDelta);
+  if (validationError !== null) {
+    throw new Error(validationError);
+  }
+
+  await mkdir(dirname(deltaPath), { recursive: true });
+  await appendFile(deltaPath, `${JSON.stringify(compressionDelta)}\n`, 'utf8');
   return deltaPath;
 }

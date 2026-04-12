@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from .schemas import (
     DELTA_TOOL_DESCRIPTION,
+    COMPRESS_TOOL_DESCRIPTION,
     ORIENTATION_SURVEY_TOOL_DESCRIPTION,
     compute_agent_state,
     create_orientation_survey_schema,
     create_state_delta_schema,
     format_state_context,
 )
-from .tools import handle_delta, handle_orientation_survey
+from .tools import handle_compress, handle_delta, handle_orientation_survey
 
 _INJECTED_SESSIONS: set[str] = set()
 
@@ -45,6 +46,54 @@ def _mark_session_end(**kwargs):
 
 def register(ctx):
     ctx.register_tool("delta", "beu", create_state_delta_schema(), handle_delta, description=DELTA_TOOL_DESCRIPTION)
+    ctx.register_tool(
+        "compress",
+        "beu",
+        {
+            "name": "compress",
+            "description": COMPRESS_TOOL_DESCRIPTION,
+            "parameters": {
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["kind", "constraint"],
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["constraint"],
+                            },
+                            "constraint": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "description": "A single compressed constraint string",
+                            },
+                        },
+                    },
+                    {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["kind", "hypothesis"],
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["hypothesis"],
+                            },
+                            "hypothesis": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "description": "A single compressed hypothesis string",
+                            },
+                        },
+                    },
+                ],
+            },
+        },
+        handle_compress,
+        description=COMPRESS_TOOL_DESCRIPTION,
+    )
     ctx.register_tool(
         "orientation_survey",
         "beu",

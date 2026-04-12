@@ -1,6 +1,6 @@
 # BeU Codex Plugin
 
-Codex uses the shared BeU MCP server for the `delta` tool and a Codex `SessionStart` hook for state injection.
+Codex uses the shared BeU MCP server for the `delta` and `compress` tools and a Codex `SessionStart` hook for state injection.
 
 The canonical architecture, shared files, and validation commands are documented in the repo root [README](../../README.md).
 

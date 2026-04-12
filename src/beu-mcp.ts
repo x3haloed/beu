@@ -9,8 +9,11 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import {
+  appendConstraintCompression,
+  appendHypothesisCompression,
   appendOrientationSurvey,
   appendStateDelta,
+  COMPRESS_TOOL_DESCRIPTION,
   createStateDeltaJsonSchemaProperties,
   DELTA_PATH,
   DELTA_TOOL_DESCRIPTION,
@@ -28,7 +31,46 @@ const STATE_DELTA_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: createStateDeltaJsonSchemaProperties(),
-  minProperties: 1
+  minProperties: 1,
+};
+
+const COMPRESS_SCHEMA = {
+  oneOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'constraint'],
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['constraint'],
+        },
+        constraint: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 200,
+          description: 'A single compressed constraint string',
+        },
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'hypothesis'],
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['hypothesis'],
+        },
+        hypothesis: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 200,
+          description: 'A single compressed hypothesis string',
+        },
+      },
+    },
+  ],
 };
 
 const ORIENTATION_SURVEY_SCHEMA = {
@@ -77,11 +119,20 @@ class BeuMcpServer {
           description: ORIENTATION_SURVEY_TOOL_DESCRIPTION,
           inputSchema: ORIENTATION_SURVEY_SCHEMA,
         },
+        {
+          name: 'compress',
+          description: COMPRESS_TOOL_DESCRIPTION,
+          inputSchema: COMPRESS_SCHEMA,
+        },
       ],
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name !== 'delta' && request.params.name !== 'orientation_survey') {
+      if (
+        request.params.name !== 'delta' &&
+        request.params.name !== 'orientation_survey' &&
+        request.params.name !== 'compress'
+      ) {
         throw new McpError(
           ErrorCode.MethodNotFound,
           `Unknown tool: ${request.params.name}`
@@ -112,6 +163,69 @@ class BeuMcpServer {
                 text: `Appended delta to ${DELTA_PATH}`,
               },
             ],
+          };
+        }
+
+        if (request.params.name === 'compress') {
+          const args = request.params.arguments ?? {};
+          if (args.kind === 'constraint') {
+            const constraint = args.constraint;
+            if (typeof constraint !== 'string' || constraint.length === 0) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: 'constraint must be a non-empty string',
+                  },
+                ],
+                isError: true,
+              };
+            }
+
+            await appendConstraintCompression(constraint);
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Compressed constraints into ${constraint} and appended to ${DELTA_PATH}`,
+                },
+              ],
+            };
+          }
+
+          if (args.kind === 'hypothesis') {
+            const hypothesis = args.hypothesis;
+            if (typeof hypothesis !== 'string' || hypothesis.length === 0) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: 'hypothesis must be a non-empty string',
+                  },
+                ],
+                isError: true,
+              };
+            }
+
+            await appendHypothesisCompression(hypothesis);
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Compressed hypotheses into ${hypothesis} and appended to ${DELTA_PATH}`,
+                },
+              ],
+            };
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'compress requires kind=constraint or kind=hypothesis',
+              },
+            ],
+            isError: true,
           };
         }
 

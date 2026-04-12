@@ -2,8 +2,11 @@ import { tool, type Plugin } from '@opencode-ai/plugin';
 import { existsSync } from 'node:fs';
 import {
   appendOrientationSurvey,
+  appendConstraintCompression,
+  appendHypothesisCompression,
   appendStateDelta,
   computeAgentState,
+  COMPRESS_TOOL_DESCRIPTION,
   DELTA_PATH,
   DELTA_TOOL_DESCRIPTION,
   ORIENTATION_SURVEY_FIELDS,
@@ -32,24 +35,26 @@ type OpenCodeEnumArraySpec = {
 
 function createOpenCodeDeltaArgs(schema: typeof tool.schema) {
   return Object.fromEntries(
-    Object.entries(STATE_DELTA_FIELDS).map(([key, spec]) => {
-      if (spec.kind === 'string') {
-        return [key, schema.string().min(spec.minLength).max(spec.maxLength).optional().describe(spec.description)];
-      }
+    Object.entries(STATE_DELTA_FIELDS)
+      .filter(([, spec]) => !spec.hidden)
+      .map(([key, spec]) => {
+        if (spec.kind === 'string') {
+          return [key, schema.string().min(spec.minLength).max(spec.maxLength).optional().describe(spec.description)];
+        }
 
-      const arraySpec = spec as OpenCodeArraySpec;
-      const item = schema.string().min(arraySpec.itemMinLength).max(arraySpec.itemMaxLength);
-      let arrayField = schema.array(item);
-      if (typeof arraySpec.maxItems === 'number') {
-        arrayField = arrayField.max(arraySpec.maxItems);
-      }
-      if (typeof arraySpec.minItems === 'number') {
-        arrayField = arrayField.min(arraySpec.minItems);
-      }
+        const arraySpec = spec as OpenCodeArraySpec;
+        const item = schema.string().min(arraySpec.itemMinLength).max(arraySpec.itemMaxLength);
+        let arrayField = schema.array(item);
+        if (typeof arraySpec.maxItems === 'number') {
+          arrayField = arrayField.max(arraySpec.maxItems);
+        }
+        if (typeof arraySpec.minItems === 'number') {
+          arrayField = arrayField.min(arraySpec.minItems);
+        }
 
-      const field = schema.union([item, arrayField]);
-      return [key, field.optional().describe(arraySpec.description)];
-    })
+        const field = schema.union([item, arrayField]);
+        return [key, field.optional().describe(arraySpec.description)];
+      })
   );
 }
 
@@ -125,6 +130,27 @@ function createOpenCodeSurveyArgs(schema: typeof tool.schema) {
   };
 }
 
+function createOpenCodeCompressArgs(schema: typeof tool.schema) {
+  return schema.union([
+    schema.object({
+      kind: schema.literal('constraint'),
+      constraint: schema
+        .string()
+        .min(1)
+        .max(200)
+        .describe('A single compressed constraint string'),
+    }),
+    schema.object({
+      kind: schema.literal('hypothesis'),
+      hypothesis: schema
+        .string()
+        .min(1)
+        .max(200)
+        .describe('A single compressed hypothesis string'),
+    }),
+  ]);
+}
+
 export const BeUPlugin: Plugin = async ({ client }) => {
   const injectedSessions = new Set<string>();
 
@@ -179,6 +205,28 @@ export const BeUPlugin: Plugin = async ({ client }) => {
           });
 
           return `Appended delta to ${path}`;
+        },
+      }),
+      compress: tool({
+        description: COMPRESS_TOOL_DESCRIPTION,
+        args: createOpenCodeCompressArgs(tool.schema),
+        async execute(args, context) {
+          const payload = args as { kind: 'constraint' | 'hypothesis'; constraint?: string; hypothesis?: string };
+          const path =
+            payload.kind === 'constraint'
+              ? await appendConstraintCompression(payload.constraint as string)
+              : await appendHypothesisCompression(payload.hypothesis as string);
+
+          context.metadata({
+            title: 'Constraint compression',
+            metadata: {
+              path,
+            },
+          });
+
+          return payload.kind === 'constraint'
+            ? `Compressed constraints and appended to ${path}`
+            : `Compressed hypotheses and appended to ${path}`;
         },
       }),
       orientation_survey: tool({

@@ -31,7 +31,7 @@ If published as a package, add it to your OpenCode config:
 
 ## Behavior
 
-- Adds a native `delta` tool directly through OpenCode's plugin API.
+- Adds native `delta` and `compress` tools directly through OpenCode's plugin API.
 - Stores deltas in `~/.beu/state/deltas.jsonl`.
 - On the first message in a session, computes the current state from the accumulated deltas and injects it as synthetic context.
 - The installed OpenCode artifact is a single bundled file in `dist/beu-opencode.js`.
@@ -46,5 +46,9 @@ The `delta` tool accepts the same fields as the MCP-backed variants:
 - `add_constraints`
 - `add_recent`
 - `set_next`
+
+The `compress` tool accepts one field:
+
+- `constraint`
 
 It returns a plain string confirming the write path.

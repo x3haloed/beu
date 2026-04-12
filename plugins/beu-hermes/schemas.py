@@ -24,6 +24,16 @@ If failing to record this change would cause the next step to go in the wrong di
 you MUST call delta().
 """.strip()
 
+COMPRESS_TOOL_DESCRIPTION = """
+Compact overloaded state dimensions into a single replacement item.
+
+Use the constraint payload shape when constraints reach capacity.
+Provide exactly one non-empty constraint string that compresses all existing constraints into a single invariant.
+
+Use the hypothesis payload shape when hypotheses reach capacity.
+Provide exactly one non-empty hypothesis string that compresses the active hypotheses into a single falsifiable summary.
+""".strip()
+
 ORIENTATION_SURVEY_TOOL_DESCRIPTION = """
 Record a one-time orientation survey for this fresh session.
 
@@ -66,6 +76,14 @@ STATE_DELTA_FIELDS: dict[str, dict[str, Any]] = {
         "itemMaxLength": 200,
         "unique": True,
         "description": "Add newly discovered constraints or invariants",
+    },
+    "remove_constraints": {
+        "kind": "string[]",
+        "itemMinLength": 1,
+        "itemMaxLength": 200,
+        "unique": True,
+        "description": "Remove constraints from the current state",
+        "hidden": True,
     },
     "add_hypothesis": {
         "kind": "object",
@@ -116,7 +134,6 @@ STATE_DELTA_FIELDS: dict[str, dict[str, Any]] = {
         "kind": "string[]",
         "itemMinLength": 1,
         "itemMaxLength": 200,
-        "maxItems": 5,
         "description": "Append recent meaningful steps (will be truncated in state)",
     },
     "set_next": {
@@ -129,8 +146,13 @@ STATE_DELTA_FIELDS: dict[str, dict[str, Any]] = {
 }
 
 STATE_DELTA_FIELD_DESCRIPTIONS = {
-    key: spec["description"] for key, spec in STATE_DELTA_FIELDS.items()
+    key: spec["description"] for key, spec in STATE_DELTA_FIELDS.items() if not spec.get("hidden")
 }
+
+THREAD_LIMIT = 8
+RECENT_LIMIT = 5
+NEXT_LIMIT = 5
+HYPOTHESIS_LIMIT = 8
 
 ORIENTATION_SURVEY_FIELDS: dict[str, dict[str, Any]] = {
     "survey_version": {
@@ -341,6 +363,15 @@ def validate_state_delta(value: Any) -> str | None:
         if error is not None:
             return f"add_constraints: {error}"
 
+    if "remove_constraints" in value:
+        error = _validate_string_array(
+            value["remove_constraints"],
+            unique=bool(STATE_DELTA_FIELDS["remove_constraints"].get("unique")),
+            max_length=STATE_DELTA_FIELDS["remove_constraints"]["itemMaxLength"],
+        )
+        if error is not None:
+            return f"remove_constraints: {error}"
+
     if "add_hypothesis" in value:
         error = _validate_hypothesis_record(value["add_hypothesis"])
         if error is not None:
@@ -375,6 +406,8 @@ def validate_state_delta(value: Any) -> str | None:
 def create_state_delta_schema() -> dict[str, Any]:
     properties: dict[str, Any] = {}
     for key, spec in STATE_DELTA_FIELDS.items():
+        if spec.get("hidden"):
+            continue
         if spec["kind"] == "string":
             properties[key] = {
                 "type": "string",
@@ -557,6 +590,10 @@ def append_unique(existing: list[str], additions: list[str]) -> list[str]:
     return next_values
 
 
+def trim_to_limit(values: list[str], limit: int) -> list[str]:
+    return list(values[-limit:]) if len(values) > limit else list(values)
+
+
 def append_unique_hypothesis(
     existing: list[dict[str, str]], addition: dict[str, str]
 ) -> list[dict[str, str]]:
@@ -611,14 +648,20 @@ def apply_delta(state: dict[str, Any], delta: dict[str, Any]) -> dict[str, Any]:
     elif "add_threads" in delta:
         next_state["threads"] = append_unique(next_state["threads"], delta.get("add_threads", []))
 
-    if "add_constraints" in delta:
+    next_state["threads"] = trim_to_limit(next_state["threads"], THREAD_LIMIT)
+
+    if "remove_constraints" in delta:
+        removed = set(delta.get("remove_constraints", []))
+        next_state["constraints"] = [constraint for constraint in next_state["constraints"] if constraint not in removed]
+        next_state["constraints"] = append_unique(next_state["constraints"], delta.get("add_constraints", []))
+    elif "add_constraints" in delta:
         next_state["constraints"] = append_unique(next_state["constraints"], delta.get("add_constraints", []))
 
     if "add_recent" in delta:
-        next_state["recent"] = (next_state["recent"] + list(delta.get("add_recent", [])))[-5:]
+        next_state["recent"] = trim_to_limit(next_state["recent"] + list(delta.get("add_recent", [])), RECENT_LIMIT)
 
     if "set_next" in delta:
-        next_state["next"] = list(delta.get("set_next", []))
+        next_state["next"] = trim_to_limit(list(delta.get("set_next", [])), NEXT_LIMIT)
 
     return next_state
 
@@ -636,17 +679,13 @@ def validate_final_state(state: dict[str, Any]) -> dict[str, Any]:
     if threads_error is not None:
         raise ValueError(f"Computed state is invalid: threads {threads_error}")
 
-    constraints_error = _validate_string_array(
-        state.get("constraints", []), unique=True, max_items=8, max_length=200
-    )
+    constraints_error = _validate_string_array(state.get("constraints", []), unique=True, max_length=200)
     if constraints_error is not None:
         raise ValueError(f"Computed state is invalid: constraints {constraints_error}")
 
     hypotheses_value = state.get("hypotheses", [])
     if not isinstance(hypotheses_value, list):
         raise ValueError("Computed state is invalid: hypotheses must be an array")
-    if len(hypotheses_value) > 8:
-        raise ValueError("Computed state is invalid: hypotheses must contain at most 8 items")
     for hypothesis in hypotheses_value:
         error = _validate_hypothesis_record(hypothesis)
         if error is not None:
@@ -705,7 +744,26 @@ def compute_agent_state(delta_path: Path = DELTA_PATH) -> dict[str, Any]:
 
 
 def format_state_context(state: dict[str, Any]) -> str:
+    constraints = state.get("constraints", [])
+    constraint_compaction_instruction = ""
+    if len(constraints) >= 8:
+        constraint_compaction_instruction = (
+            "CONSTRAINT COMPACTION REQUIRED:\n"
+            f"- Constraints have reached their limit ({len(constraints)}/8).\n"
+            "- You MUST call `compress` immediately before doing anything else.\n"
+            "- Pass exactly one non-empty constraint string that compresses all existing constraints into a single invariant.\n\n"
+        )
+
     hypotheses = state.get("hypotheses", [])
+    hypothesis_compaction_instruction = ""
+    if len(hypotheses) >= HYPOTHESIS_LIMIT:
+        hypothesis_compaction_instruction = (
+            "HYPOTHESIS COMPACTION REQUIRED:\n"
+            f"- Hypotheses have reached their limit ({len(hypotheses)}/{HYPOTHESIS_LIMIT}).\n"
+            "- You MUST call `compress` immediately before doing anything else.\n"
+            "- Pass exactly one non-empty hypothesis string that compresses the active hypotheses into a single falsifiable summary.\n\n"
+        )
+
     if hypotheses:
         lines = "\n".join(
             f"{index}. {item['hypothesis']}\n   Invalidated by: {item['invalidated_by']}"
@@ -722,6 +780,7 @@ def format_state_context(state: dict[str, Any]) -> str:
         f"{json.dumps(state, indent=2, ensure_ascii=False)}\n\n"
         f"{hypotheses_section}"
         "You MUST maintain this state as you work.\n\n"
+        f"{constraint_compaction_instruction}{hypothesis_compaction_instruction}"
         "Call the delta tool IMMEDIATELY if any of the following become true:\n"
         "- The focus changes or sharpens\n"
         "- A new thread appears\n"

@@ -3,7 +3,8 @@
 BeU keeps agent orientation consistent across host integrations by enforcing the same two-step model everywhere:
 
 1. capture state deltas through a `delta` tool
-2. reconstruct current state from accumulated deltas and inject it into model context when a session starts
+2. compact constraints through a `compress` tool when the constraint set reaches capacity
+3. reconstruct current state from accumulated deltas and inject it into model context when a session starts
 
 The canonical storage path is `~/.beu/state/deltas.jsonl`.
 
@@ -21,10 +22,10 @@ All hosts share the same delta semantics, final state semantics, and prompt/tool
 ## Canonical Files
 
 - `agent-state.schema.json`: final reconstructed state shape
-- `src/beu-state.ts`: shared delta validation, delta append, state folding, injected prompt text, and `delta` tool guidance
+- `src/beu-state.ts`: shared delta validation, delta append, constraint compression, state folding, injected prompt text, and tool guidance
 - `src/compute-agent-state.ts`: CLI that folds the delta log and prints injected context text
-- `src/beu-mcp.ts`: MCP `delta` tool used by Codex and Copilot CLI
-- `plugins/beu-opencode/src/index.ts`: OpenCode-native wrapper around the shared state module
+- `src/beu-mcp.ts`: MCP `delta` and `compress` tools used by Codex and Copilot CLI
+- `plugins/beu-opencode/src/index.ts`: OpenCode-native wrapper around the shared state module with `delta` and `compress`
 - `plugins/beu-hermes/plugin.yaml`, `plugins/beu-hermes/__init__.py`, `plugins/beu-hermes/schemas.py`, and `plugins/beu-hermes/tools.py`: Hermes Agent plugin
 
 ## Commands
